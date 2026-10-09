@@ -1,0 +1,4 @@
+include LICENSE README.md build.sh setup.sh
+recursive-include runtime *.go go.mod
+recursive-include tests *.py *.mjs
+recursive-include web *.js *.css
