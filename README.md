@@ -48,6 +48,8 @@ Python 要求 3.11 或更新。`pyproject.toml` 是 FnPackKit 工具版本的唯
 
 FnPackKit 只读 `/var/apps/<app_id>/manifest` 获取已安装版本，支持 fnOS 的空格对齐 `key = value` 格式。安装目录不存在显示未安装；目录存在但 manifest 缺失、权限不足、字段损坏或 appname 不匹配会明确报错。已安装版本仅供比较，不用于计算建议版本；历史安装版本原样显示。
 
+封包复用 BuildFlow 的实时动作显示：当前 FPK 文件名下依次显示模板复制、渲染、应用文件复制、清单摘要、fnpack、实际归档检查和最终 SHA-256。应用步骤可用 `with ctx.activity("动作", target="目标"):` 与 `ctx.status("当前细节")` 报告语义状态，无需自带终端渲染器。命令捕获内容保留在日志中；负控制捕获的非零退出不会把整项构建标为失败。BuildFlow 已显示的最终错误由 `BuildError.reported` 标记，FnPackKit 仅打印未显示的错误并保留原退出码。
+
 CI 使用 `--build-version 1.2.4`、`--build-version 1.2.4-01`，或 `--next-version --channel stable|test`；非交互环境缺少明确选版方式会失败，不等待输入。`--channel` 可在交互时预选类型。没有顶层 `version` 的简易项目沿用自身 payload 版本，不进入选版流程，也不能传这些选版参数。通用命令步骤可用 `{version}` 接收选定值。
 
 应用命令按选定版本写出 payload manifest；下例展示选择 `1.2.4` 后的结果。所有相对输入路径以 payload manifest 所在目录为基准。`destination` 相对封包 staging，必须是安全路径。`mode` 是 JSON 整数，例如 `493` 表示 `0755`。模板目录由应用拥有，`.in` 文件中的 `@UPPER_TOKEN@` 由 `values` 替换；缺少值或残留嵌套 token 会失败。运行配置中的其他占位符应由应用运行时 Go 配置模块处理，避免把包含待运行时替换 token 的文件声明为 `.in`。

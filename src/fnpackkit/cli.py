@@ -41,7 +41,8 @@ def main(argv=None):
         print(result.output)
         return 0
     except BuildError as exc:
-        print(f"FnPackKit: {exc}", file=sys.stderr)
+        if not exc.reported:
+            print(f"FnPackKit: {exc}", file=sys.stderr)
         return exc.exit_code
     except (OSError, ValueError, ImportError, AttributeError, KeyError, TypeError) as exc:
         print(f"FnPackKit: {exc}", file=sys.stderr)
