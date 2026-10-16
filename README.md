@@ -72,6 +72,67 @@ CI 使用 `--build-version 1.2.4`、`--build-version 1.2.4-01`，或 `--next-ver
 
 所有应用的 FPK 发布信息由公共 `src/fnpackkit/publisher.py` 统一拥有：`maintainer`（开发者）和 `distributor`（发布者）固定为 `user-no-found`，`maintainer_url` 和 `distributor_url` 固定为 `https://github.com/user-no-found`。应用无需在模板或 project 配置中声明这四项；已有值也会被覆盖。公共封包在模板渲染及文件复制完成后、计算 staging 哈希前写入这些字段，并用既有实际归档校验确认最终包一致。重复字段或格式损坏会在改写前报错。应用的名称、版本、`source` 以及上游 LICENSE 内容仍由应用提供。
 
+## 静态契约与项目图标
+
+封包前会检查 manifest 的 `platform`（`x86`、`arm` 或 `all`）、第三方来源和布尔字段，以及 desktop 目录、启动入口、图标引用之间的一致性。`config/privilege`、`config/resource` 和向导文件使用有大小上限、拒绝重复键的 JSON 读取；检查已知权限/资源字段和路径，保留未知官方扩展字段。允许 `root` 模式；未声明 UI 的服务包无需创建入口。向导自定义环境字段不能占用 `TRIM_` 前缀。普通端口支持 `${wizard_port}`，URL 支持向导变量；网关和 CGI 的 `protocol/port` 不参与对应路由检查。网关前缀必须属于本应用，socket 为文件名，入口 URL 留在前缀内。
+
+应用按实际使用显式声明可选能力：
+
+```json
+"fnpackkit": {
+  "schema": 1,
+  "requires": ">=0.1,<0.2",
+  "adapter": "scripts/build.py:plan",
+  "capabilities": {
+    "js_sdk": true,
+    "api_scopes": ["trim.system.getPlatformConfig"]
+  }
+}
+```
+
+`js_sdk=true` 要求 manifest `micro_app=true`；`api_scopes` 列出实际调用的后端开放 API，其值必须被 `config/resource` 的 `api-scope` 数组覆盖。前端 SDK 的 `getPlatformConfig` 不要求后端 scope。能力声明自身拒绝未知字段，避免拼写错误跳过门禁；不扫描任意 JavaScript，不把手机相机或文件选择当成 SDK/API 调用。声明检查不证明权限已获批准、最低设备/宿主版本已满足或业务数据已经授权，这些由应用及目标环境验证。
+
+项目可通过顶层 `branding.icon` 使用统一 PNG 派生：
+
+```json
+"branding": {
+  "icon": {
+    "source": "assets/app-icon.png",
+    "variants": {"64": "assets/app-icon-64.png"}
+  }
+}
+```
+
+相对路径基于 `project.json` 所在目录。`source` 必填，`variants` 可提供 `64` 和 `256` 的已确认 sRGB PNG；预制变体必须精确为相应正方形尺寸，保留原字节。其余尺寸由 BuildFlow 以 RGBA PNG 生成，保持比例及透明度，必要时将主源 ICC 转换为 sRGB。每次派生写入本次工作目录的独立 `assets` 子目录，不修改输入。
+
+FnPackKit 映射 `ICON.PNG`、`ICON_256.PNG`、`app/ui/images/icon_64.png` 和 `app/ui/images/icon_256.png`。应用继续提供 UI config；模板和 payload 必须移除这四个位置的旧文件，任何已存在映射明确报冲突。未声明 branding 时继续使用应用自己的模板图标。Web favicon、HTML 和业务条目图标由应用负责。
+
+根图标为 64/256px，入口 `{0}` 图标展开对应尺寸，每个文件上限按 1 MiB 执行。PNG 检查真实格式、CRC、完整解码、尺寸和 sRGB；普通无标签 PNG 明确按 sRGB 解释，不能仅因缺少色彩 chunk 拒绝。已有 JPEG 通过 magic、解码、像素预算和尺寸检查，但此路径不证明 JPEG 的 sRGB 色彩语义；官方允许 PNG/JPEG，当前派生接口只接受 PNG。图标检查延迟加载图像依赖，Python 发行包声明 `buildflow[images]`；源码调用需在所选 Python 环境准备其 Pillow 依赖，不会自动安装。派生来源、哈希和转换元数据保存在每包 `.build.json` 的 `icons` 字段。
+
+## 生命周期声明与隔离验证
+
+Payload的可选lifecycle字段接受Lifecycle(hooks)；未声明时原有cmd自定义脚本逐字保留。LifecycleCommand声明location、相对path、literal args及required_env。target命令位于已部署app内；package命令位于包外层cmd/hooks/。install_init与uninstall_callback拒绝target依赖。缺失hook默认为成功，未声明main:status返回3；声明的status命令返回3时保持“未运行”语义。
+
+```python
+from fnpackkit.contracts import Lifecycle, LifecycleCommand
+
+lifecycle = Lifecycle({
+    "install_callback": LifecycleCommand("target", "libexec/configure"),
+    "uninstall_callback": LifecycleCommand("package", "cmd/hooks/after-uninstall"),
+})
+# Pass lifecycle=lifecycle when constructing Payload.
+```
+
+生成入口遇到自定义同名cmd文件会拒绝覆盖。命令必须是已声明位置的普通可执行文件；required_env仅允许TRIM_变量名，参数按字面值传递，不通过eval执行。公共错误函数fnp_fail位于cmd/fnpackkit.sh，可供package hook读取；它保留退出码，向stderr与TRIM_TEMP_LOGFILE写入调用方提供的脱敏错误，不倾倒环境或参数。
+
+执行原生验证时，可调用 `fnpackkit.execution_directory.execution_directory()` 创建短路径0700目录。
+它显式使用可执行的 `/tmp`，避免继承位于 `noexec` 挂载的普通数据 `TMPDIR`；若 `/tmp` 本身禁止执行则立即报错。
+调用方负责停止夹具进程并删除目录；失败时可保留证据。需要Unix socket的浏览器临时目录可放在该目录的私有子目录中。
+
+fnpackkit.lifecycle_verify.LifecycleFixture接收实际FPK与空的0700、当前用户所有的规范目录。install先在target缺失时执行前置，再部署内层文件、执行回调；upgrade先执行前置，再替换target；uninstall先执行前置，删除target后执行回调。events记录各阶段target是否存在；业务状态断言由应用提供。夹具路径不可被environment覆盖。
+
+验证器不会自动执行每个应用的脚本。调用方必须显式提供执行器，并确认hook只操作隔离目录；它不是任意脚本的安全沙箱，不模拟fnOS网关、应用账号创建、ACL或应用中心的完整行为。数据库迁移、备份、停机及数据删除策略由应用负责。
+
 ## Python 构建适配
 
 复杂应用用 `"adapter": "scripts/build.py:plan"` 替代 `"payload"`。二者互斥。只有显式选中并发起构建后，工具才加载该应用的受信 Python 文件；adapter 是与构建用户同权的代码，不是安全沙箱。`plan(project)` 接受 BuildFlow `Project`，返回 `steps`、`payload` 及可选 `metadata`、`verify`、`artifacts`：
@@ -197,3 +258,31 @@ FNPACKKIT_CHROMIUM=/path/to/chrome node tests/browser_transport.mjs
 ```
 
 测试打印保留的临时证据目录，状态测试输出截图和 JSON；transport 测试用真实 WebSocket 验证 marker、应用子协议、每次新票据及取消。共享 Go 安全回归通过真实 Unix HTTP/WS 边界检验票据绑定、期限、并发单次消费和配额。最终应用仍需在自己的真实代理链路验证桌面与移动端。
+
+## Shared uninstall policy
+
+`Payload.uninstall=UninstallPolicy(...)` declares protected relative paths, disposable paths,
+and four localized wizard labels. Paths start with `etc`, `var`, `home`, or `meta`; `*` matches
+one directory component. Disposable paths cannot contain protected paths. The generated
+`wizard/uninstall` defaults to `retain`, with an explicit `delete` option.
+
+Use root lifecycle privilege together with `LifecycleCommand(..., run_as="package")` for
+every application hook. Generated dispatch validates the package UID/GID against the OS
+account and uses `/usr/sbin/runuser` before running application commands. The shared metadata
+helpers require `/usr/bin/python3`; they do not depend on the installed runtime payload.
+
+The uninstall preflight checks the choice, identity, volume namespace, owners, mounts and
+links before the app stop hook. Retain keeps all undeclared data and configuration, removes
+only declared disposable paths plus temporary state, and removes empty home/meta roots.
+Delete removes the application's `TRIM_PKGETC`, `TRIM_PKGVAR`, `TRIM_PKGHOME`, `TRIM_PKGMETA`,
+and `TRIM_PKGTMP` roots. Directory descriptors anchor traversal; roots cannot be symlinks,
+namespace parents must be root owned and not writable by other accounts, and mounted trees,
+foreign owners, device files and hardlinks cause an error. Missing roots permit repeat callbacks.
+Post-cleanup errors reach the platform lifecycle log. Apps without this policy keep their
+existing custom lifecycle behavior.
+
+`NamespaceFixture` verifies actual FPK callbacks in an explicitly selected, disposable,
+root-owned namespace while application hooks run under a selected nonroot account. It
+requires root execution. `LifecycleFixture` remains available for ordinary nonroot archive tests.
+
+Root lifecycle preparation restores only the compiled application namespace: data roots become private and owned by the package account, and the runtime root permits its gateway socket. When fnOS has changed a data root to root ownership, the validated tree is handed back recursively without following links. Ordinary already-owned roots do not trigger tree traversal. The platform may remove program files despite a rejected callback; callback errors protect data cleanup and do not promise to cancel the platform operation.

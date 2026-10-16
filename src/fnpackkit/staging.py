@@ -6,7 +6,11 @@ import re
 import shutil
 
 from .archive import safe_relative
+from .directories import ensure_directory
+from .lifecycle import generate_lifecycle
+from .uninstall import generate_uninstall
 from .publisher import apply_profile
+from .stage_checks import validate_stage_contract
 
 
 TOKEN = re.compile(r"@([A-Z][A-Z0-9_]*)@")
@@ -48,9 +52,9 @@ def _copy_templates(payload, stage):
     for path in paths:
         target = stage / path.relative_to(source)
         if path.is_dir():
-            target.mkdir(exist_ok=True)
+            ensure_directory(stage, target)
         else:
-            target.parent.mkdir(parents=True, exist_ok=True)
+            ensure_directory(stage, target.parent)
             shutil.copy2(path, target)
 
 
@@ -74,13 +78,23 @@ def _copy_payload(payload, stage):
         target = stage / safe_relative(entry.destination)
         if target.exists():
             raise ValueError(f"payload would overwrite template content: {target}")
-        target.parent.mkdir(parents=True, exist_ok=True)
+        ensure_directory(stage, target.parent)
         shutil.copy2(source, target)
         if entry.mode is not None:
             target.chmod(entry.mode)
 
 
-def _validate_stage(payload, stage):
+def _directory_modes(payload, stage):
+    """Keep declared directory modes and make generated program parents traversable."""
+    source = Path(payload.template)
+    declared = {path.relative_to(source): path.stat().st_mode & 0o777
+                for path in regular_tree(source) if path.is_dir()}
+    directories = [path for path in regular_tree(stage) if path.is_dir()]
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        path.chmod(declared.get(path.relative_to(stage), 0o755))
+
+
+def _validate_stage(payload, stage, capabilities):
     for name in ["manifest", *payload.required]:
         if not (stage / safe_relative(name)).is_file():
             raise ValueError(f"required staged file missing: {name}")
@@ -90,12 +104,13 @@ def _validate_stage(payload, stage):
     for field, token in {"appname": "APP_ID", "version": "VERSION", "platform": "PLATFORM"}.items():
         if manifest.get(field) != payload.values[token]:
             raise ValueError(f"rendered manifest {field} differs from payload metadata")
+    validate_stage_contract(stage, manifest, capabilities)
     return {path.relative_to(stage).as_posix(): {"sha256": digest(path),
             "mode": path.stat().st_mode & 0o777, "size": path.stat().st_size}
             for path in regular_tree(stage) if path.is_file()}
 
 
-def create_stage(payload, stage, *, activity=None):
+def create_stage(payload, stage, *, activity=None, capabilities=None):
     """Stage a payload, optionally reporting through the caller's shared activity API."""
     span = activity or (lambda label: nullcontext())
     with span("复制封包模板"):
@@ -104,5 +119,9 @@ def create_stage(payload, stage, *, activity=None):
         _render_templates(payload, stage)
     with span("复制应用文件"):
         _copy_payload(payload, stage)
+    with span("生成声明的生命周期入口"):
+        generate_lifecycle(stage, payload.lifecycle)
+        generate_uninstall(stage, payload.uninstall, payload.values["APP_ID"], payload.lifecycle)
     with span("核对文件清单与摘要"):
-        return _validate_stage(payload, stage)
+        _directory_modes(payload, stage)
+        return _validate_stage(payload, stage, capabilities)

@@ -10,7 +10,11 @@ def verify_package(path, stage, expected):
     """Account for fnpack's manifest checksum and mirrored config only."""
     outer, inner = inspect_fpk(path)
     actual = {name: entry for name, entry in outer.items() if name != "app.tgz"}
-    actual.update({"app/" + name: entry for name, entry in inner.items()})
+    payload = {"app/" + name: entry for name, entry in inner.items()}
+    collisions = sorted(set(actual) & set(payload))
+    if collisions:
+        raise ValueError(f"cross-layer archive path collision: {', '.join(collisions)}")
+    actual.update(payload)
     expected = dict(expected)
     # fnpack mirrors these package resource declarations into the app payload.
     for name in ("config/resource", "config/privilege"):

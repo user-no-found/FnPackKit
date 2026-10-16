@@ -6,7 +6,10 @@ import re
 from buildflow.project import check_requirement
 from .archive import safe_relative
 from .contracts import Payload, PayloadFile
+from .lifecycle import parse_lifecycle, validate_lifecycle
 from .metadata import tool_version
+from .uninstall import parse_uninstall, validate_uninstall
+from .config_checks import validate_capabilities
 
 
 def validate_project(project):
@@ -17,10 +20,11 @@ def validate_project(project):
         raise ValueError("fnpackkit.schema must be 1")
     if "fpk" not in project.config["targets"]:
         raise ValueError("project does not declare buildflow target fpk")
-    unknown = set(config) - {"schema", "requires", "payload", "adapter"}
+    unknown = set(config) - {"schema", "requires", "payload", "adapter", "capabilities"}
     if unknown:
         raise ValueError(f"unknown fnpackkit fields: {sorted(unknown)}")
     check_requirement(config.get("requires", ""), tool_version())
+    validate_capabilities(config.get("capabilities", {}))
     if bool(config.get("payload")) == bool(config.get("adapter")):
         raise ValueError("declare exactly one of fnpackkit.payload or fnpackkit.adapter")
     for key in ("payload", "adapter"):
@@ -36,7 +40,7 @@ def read_payload(path):
     data = json.loads(path.read_text())
     if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != 1:
         raise ValueError("payload.schema must be 1")
-    unknown = set(data) - {"schema", "template", "files", "values", "artifact_name", "metadata", "required"}
+    unknown = set(data) - {"schema", "template", "files", "values", "artifact_name", "metadata", "required", "lifecycle", "uninstall"}
     if unknown:
         raise ValueError(f"unknown payload fields: {sorted(unknown)}")
     def source(value):
@@ -48,12 +52,14 @@ def read_payload(path):
             raise ValueError("invalid payload file declaration")
         files.append(PayloadFile(source(entry["source"]), entry["destination"], entry.get("mode")))
     return Payload(source(data["template"]), files, data["values"], data["artifact_name"],
-                   data.get("metadata", {}), data.get("required", []))
+                   data.get("metadata", {}), data.get("required", []), parse_lifecycle(data.get("lifecycle")), parse_uninstall(data.get("uninstall")))
 
 
 def validate_payload(payload, app_id):
     if not isinstance(payload, Payload):
         raise ValueError("adapter must return Payload declarations")
+    validate_lifecycle(payload.lifecycle)
+    validate_uninstall(payload.uninstall)
     if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.fpk", payload.artifact_name)
             or payload.artifact_name.startswith(".")):
         raise ValueError("artifact_name must be one .fpk filename")
