@@ -1,5 +1,7 @@
 # FnPackKit
 
+AI 接入或维护本项目时，先阅读 [公共接口选择与接入约束](AGENTS.md)，再按需使用原生运行面板或可选的独立 Web 桥接接口。
+
 FnPackKit 使用 BuildFlow 的同一套步骤执行器、日志、进程取消和产物发布机制，在原生 Linux 上生成并验证 fnOS FPK。应用提供自己的构建步骤、模板与 payload 声明；工具不保存应用清单，也不包含应用身份、图标或专属二进制规则。最终应用直接链接 `runtime/` 中的 Go 共享机制，NAS 无需安装 FnPackKit。
 
 Python 要求 3.11 或更新。`pyproject.toml` 是 FnPackKit 工具版本的唯一来源。依赖方向为应用 → FnPackKit → BuildFlow；普通 Linux/Windows 项目可以直接使用 BuildFlow。Python 包声明 BuildFlow 的 GitHub 来源，本地源码初始化不安装系统环境或下载工具。
@@ -27,6 +29,7 @@ Python 要求 3.11 或更新。`pyproject.toml` 是 FnPackKit 工具版本的唯
 {
   "app_id": "example",
   "display_name": "Example",
+  "package_name": "Example",
   "version": "1.2.3",
   "buildflow": {
     "schema": 1,
@@ -62,11 +65,15 @@ CI 使用 `--build-version 1.2.4`、`--build-version 1.2.4-01`，或 `--next-ver
     {"source": "/path/to/build/program", "destination": "app/bin/program", "mode": 493}
   ],
   "values": {"APP_ID": "example", "VERSION": "1.2.4", "PLATFORM": "x86"},
-  "artifact_name": "example_1.2.4_x86.fpk",
+  "artifact_name": "Example_1.2.4_amd64.fpk",
   "required": ["app/bin/program"],
   "metadata": {"source_revision": "application-supplied-fixed-revision"}
 }
 ```
+
+共享 FPK 工作流默认以 `<发布名称>_<项目版本>_<目标架构>.fpk` 命名，保留已确认发布名称的大小写；例如 `Example_1.2.4_amd64.fpk`。已有明确项目约定或用户要求时遵循其约定。`app_id` 是平台内部标识，`display_name` 是 UI 名称；例中的可选 `package_name` 表达独立的发布文件名来源，由应用从同一 project 声明派生，工具不把它当作第二版本源。不要默认使用内部 ID 作为发布名称。
+
+manifest 的 `platform=x86/arm/all` 与文件名的目标架构属于不同契约。例如 Linux x86_64 载荷使用文件名标签 `amd64`、manifest `x86`；aarch64 载荷可用 `arm64`、manifest `arm`。不能把 `x86` 直接拼成工作流的架构标签，也不因示例而要求项目生成未经要求的其他架构。这是共享工作流约定，不是 fnOS 官方强制文件名。
 
 模板必须包含可渲染的 `manifest`、`app/` 以及 fnpack 对该应用要求的配置、生命周期脚本和图标。`APP_ID` 必须与 project 一致；manifest 的 appname/version/platform 必须与 payload 声明一致；项目声明 `version` 时，payload `VERSION` 必须与其精确相等。数据、脚本、动态程序和静态程序均可作为普通 payload 文件；ELF 架构和运行依赖检查由应用步骤负责。文件和模板不接受符号链接、特殊文件、特殊权限位、重复或覆盖目标。
 
@@ -103,6 +110,8 @@ CI 使用 `--build-version 1.2.4`、`--build-version 1.2.4-01`，或 `--next-ver
 }
 ```
 
+上游封装应用先从选定修订中选择已确认的原始应用图标，再声明或投影到 `branding.icon.source`；共享接口派生所提供的图像，不自动发现上游资源。包自身的安装、桌面和窗口名称使用已确认的 `display_name`，描述放在描述字段，不能自行拼接为新名称。
+
 相对路径基于 `project.json` 所在目录。`source` 必填，`variants` 可提供 `64` 和 `256` 的已确认 sRGB PNG；预制变体必须精确为相应正方形尺寸，保留原字节。其余尺寸由 BuildFlow 以 RGBA PNG 生成，保持比例及透明度，必要时将主源 ICC 转换为 sRGB。每次派生写入本次工作目录的独立 `assets` 子目录，不修改输入。
 
 FnPackKit 映射 `ICON.PNG`、`ICON_256.PNG`、`app/ui/images/icon_64.png` 和 `app/ui/images/icon_256.png`。应用继续提供 UI config；模板和 payload 必须移除这四个位置的旧文件，任何已存在映射明确报冲突。未声明 branding 时继续使用应用自己的模板图标。Web favicon、HTML 和业务条目图标由应用负责。
@@ -127,11 +136,31 @@ lifecycle = Lifecycle({
 
 执行原生验证时，可调用 `fnpackkit.execution_directory.execution_directory()` 创建短路径0700目录。
 它显式使用可执行的 `/tmp`，避免继承位于 `noexec` 挂载的普通数据 `TMPDIR`；若 `/tmp` 本身禁止执行则立即报错。
-调用方负责停止夹具进程并删除目录；失败时可保留证据。需要Unix socket的浏览器临时目录可放在该目录的私有子目录中。
+调用方负责停止夹具进程并删除目录；失败时可保留证据。runner 的进程组取消不会自动回收主动脱离组的服务；此类验证须能在父验证进程被终止后仍关闭自己创建的服务及其子进程，并在退出前确认 socket 与目录清理。清理必须绑定具体夹具身份，不能按进程名批量终止。需要Unix socket的浏览器临时目录可放在该目录的私有子目录中。
 
 fnpackkit.lifecycle_verify.LifecycleFixture接收实际FPK与空的0700、当前用户所有的规范目录。install先在target缺失时执行前置，再部署内层文件、执行回调；upgrade先执行前置，再替换target；uninstall先执行前置，删除target后执行回调。events记录各阶段target是否存在；业务状态断言由应用提供。夹具路径不可被environment覆盖。
 
 验证器不会自动执行每个应用的脚本。调用方必须显式提供执行器，并确认hook只操作隔离目录；它不是任意脚本的安全沙箱，不模拟fnOS网关、应用账号创建、ACL或应用中心的完整行为。数据库迁移、备份、停机及数据删除策略由应用负责。
+
+## 完整流水线接入
+
+应用根目录的薄入口可以直接使用以下结构；应用参数若需要转换，应在转发前完成。
+
+```sh
+#!/bin/sh
+set -eu
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+tool_config="${XDG_CONFIG_HOME:-$HOME/.config}/buildflow/environment.sh"
+if [ -f "$tool_config" ]; then . "$tool_config"; fi
+: "${FNPACKKIT_PATH:?先运行 FnPackKit/setup.sh 登记工具位置}"
+exec "$FNPACKKIT_PATH/build.sh" --project "$project_root/project.json" "$@"
+```
+
+不要在入口中先准备源码、安装依赖或编译，再只把最后封包放入 FnPackKit。所有生产步骤在 adapter 的 Step 中通过 `ctx.runner` 执行，并用 `ctx.activity` 标记业务含义，统一接受构建锁、日志、进度、取消及发布控制。创建计划和导入 adapter 时不执行构建工作。
+
+交互入口不自动传入当前版本的 `--build-version`。共享选版应先于源码下载与编译，并把选定版本传入 adapter。实现入口时同时读取上文的初始化、版本选择与下文的适配契约，不能只复制 payload 示例。BuildFlow 的语言工具链边界见其 README；FnPackKit 的 Go runtime 是链接到应用的机制库，不是 Go 编译器发现或安装接口。
+
+显式的仅封包模式可以复用生产目录，但须校验其生产输入与内容证据：固定业务源码、应用自身编译/生成源码、实际链接的共享源码、工具链和构建选项，以及完整生产文件清单、字节及相关权限。不能只核对上游提交或一个运行时文件，就将修改后的本地代码与旧二进制拼成新包。构建中输入发生变化时拒绝发布；缓存缺失、过期或无法证明来源时要求对应生产步骤重建。
 
 ## Python 构建适配
 
@@ -151,7 +180,7 @@ def plan(project):
             template=project.root / "packaging/fnos",
             files=[PayloadFile(project.root / "build/program", "app/bin/program", 0o755)],
             values={"APP_ID": project.data["app_id"], "VERSION": project.data["version"], "PLATFORM": "x86"},
-            artifact_name=f"{project.data['app_id']}_{project.data['version']}_x86.fpk",
+            artifact_name=f"{project.data['package_name']}_{project.data['version']}_amd64.fpk",
         )
 
     return {"steps": [Step("编译", compile_application)], "payload": payload}
@@ -178,7 +207,7 @@ FPK 成功前会检查实际外层 tar 和内层 app.tgz，拒绝路径穿越、
 | `gatewaypolicy` | `New(Config)`、`Policy.Check` 统一请求来源、路径与 FN 身份头边界；`Audit`、`WriteRejection`、`WriteFailure` 输出受限诊断。 |
 | `auth` | `Headers(http.Header)` 在已受信连接上严格解析单值 FN 身份头；`Check(ctx, Request, Authorizer)` 要求调用者提供当前应用授权策略，缺少策略拒绝。 |
 | `securefs` | `RootPath`、`RootDirectory`、`UserDirectory` 核对根控制的路径及用户私有目录；`RestoreUserState` 在离线生命周期中恢复升级后变为 root 的用户状态。 |
-| `process` | `Start` 管理实际子进程句柄及一次 Wait；`Child.Done/Alive/Terminate/Result` 管理生命周期；`Credential` 拒绝 root 和无效 UID/GID。 |
+| `process` | `Start` 管理实际子进程句柄及一次 Wait；`Child.Done/Alive/Terminate/Result` 管理生命周期；显式 `KillAndWait(timeout)` 通过持有的进程句柄结束子进程并等待回收，只有调用方确认可中止当前工作时使用，不改变 `Terminate` 的默认行为；`Credential` 拒绝 root 和无效 UID/GID。 |
 
 `auth.ValidateMode` 只接受显式 `per-user-process` 或 `trusted-proxy` 集成声明；它不替应用完成认证对接。任意 TCP 请求或客户端头不能直接调用 `Headers` 后获得可信身份。NSS 账号存在不等于 FN 账号已启用、应用权限有效或 UID 从未被重用；这些需调用者的权威授权来源。长连接寿命提供有界重验机会，不表示权限撤销立即生效。上游账号绑定、角色、Cookie、会话撤销、数据权限及业务验证由应用负责。未知认证模式明确拒绝，不能为任意 Web 应用宣称无适配免登。
 
@@ -238,6 +267,14 @@ HTTP server 必须使用经过信任配置的 `peer.Listener`，并设置 `serve
 
 可见文案由应用提供：必需字段由 JS 中唯一 `requiredLabels` 数组定义，拒绝原因由唯一 `reasons` 集合定义；应用可在构建时校验其翻译覆盖。`labels.reasons` 可映射固定原因，没有映射使用通用拒绝文案。每次连接失败最多发一次有超时的同源 POST，最多读取 4096 字节，只显示固定 schema/code、服务端 ID 和可验证 HTTP 状态；不显示上游 HTML、正文或 URL。旧探测结果不能覆盖已恢复的状态。
 
+## 外部浏览器链接
+
+上游 Web 应用需要在飞牛移动宿主中打开外链时，可以显式接入 `fnpackkit.browser_assets.install_external_links(index, cache, labels)`。`index` 为生产 HTML 入口，`cache` 为项目私有 SDK 下载缓存。方法将共用 `web/external-links.js`、锁定完整性校验的 `@trimjs/web-app` SDK 和启动模块投影到入口旁的 `fnpackkit/`，并在上游模块之前加载；不修改业务源码。源码资源优先取自显式 `FNPACKKIT_PATH`，未设置时使用当前 checkout；wheel 调用应指向完整 checkout 或解压 sdist，空或无效来源明确失败。`labels` 必须提供 `title`、`copied`、`copyFailed`、`copy`、`open`、`close`。调用应用声明 `micro_app=true`，并把 `web/` 和 `src/fnpackkit/browser_assets.py` 纳入生产输入摘要。
+
+组件保留同源及已有窗口导航。外部 HTTP(S) 新窗口在 Web 中同步打开并断开 opener，在移动宿主中调用 SDK `openURL`；宿主调用有超时。普通外部 `_blank` 链接也经过同一路径，已由业务处理的点击保持原行为。用于授权的 `about:blank` 句柄支持后续 `location.replace` 和取消。打开不可用时显示链接并尝试复制，复制失败保留手动选择；URL 不写入日志或存储。应用不得把成功打开授权网页当作 OAuth 回调成功，供应商的 callback/origin 合约仍由业务应用负责。
+
+浏览器回归：在已登记 BuildFlow 浏览器环境中，设置 `FNPACKKIT_BROWSER_E2E=1` 后运行 `python3 -m unittest discover -s tests -p test_browser_assets.py -v`。测试覆盖真实 Web 弹窗和剪贴板，以及移动 SDK 模拟、超时和取消；不替代真实飞牛 App/FN Connect 验证。
+
 ## 验证
 
 ```sh
@@ -266,8 +303,8 @@ and four localized wizard labels. Paths start with `etc`, `var`, `home`, or `met
 one directory component. Disposable paths cannot contain protected paths. The generated
 `wizard/uninstall` defaults to `retain`, with an explicit `delete` option.
 
-Use root lifecycle privilege together with `LifecycleCommand(..., run_as="package")` for
-every application hook. Generated dispatch validates the package UID/GID against the OS
+The default package-account policy uses root lifecycle privilege together with
+`LifecycleCommand(..., run_as="package")` for every application hook. Generated dispatch validates the package UID/GID against the OS
 account and uses `/usr/sbin/runuser` before running application commands. The shared metadata
 helpers require `/usr/bin/python3`; they do not depend on the installed runtime payload.
 
@@ -282,7 +319,81 @@ Post-cleanup errors reach the platform lifecycle log. Apps without this policy k
 existing custom lifecycle behavior.
 
 `NamespaceFixture` verifies actual FPK callbacks in an explicitly selected, disposable,
-root-owned namespace while application hooks run under a selected nonroot account. It
+root-owned namespace. The policy chooses package-account dispatch or root preparation with NAS-user workers. It
 requires root execution. `LifecycleFixture` remains available for ordinary nonroot archive tests.
 
-Root lifecycle preparation restores only the compiled application namespace: data roots become private and owned by the package account, and the runtime root permits its gateway socket. When fnOS has changed a data root to root ownership, the validated tree is handed back recursively without following links. Ordinary already-owned roots do not trigger tree traversal. The platform may remove program files despite a rejected callback; callback errors protect data cleanup and do not promise to cancel the platform operation.
+Default package-account lifecycle preparation restores only the compiled application namespace: data roots become private and owned by the package account, and the runtime root permits its gateway socket. When fnOS has changed a data root to root ownership, the validated tree is handed back recursively without following links. Ordinary already-owned roots do not trigger tree traversal. The platform may remove program files despite a rejected callback; callback errors protect data cleanup and do not promise to cancel the platform operation.
+
+
+Choose the mode from the application's execution and data contract:
+
+| Mode | `nas_user_roots` | All declared hooks' `run_as` | Application responsibility |
+| --- | --- | --- | --- |
+| Package account | `()` (default) | `"package"` | Package-owned data and nonroot service |
+| NAS users | Selected `"var"` / `"tmp"` | `"current"` | Root supervisor prepares authority and starts authorized nonroot NAS-user workers |
+
+Both shared-policy modes require `config/privilege` defaults `run-as: root`.
+In NAS mode, `current` means that root supervisor, not the NAS user. It does not
+select an owner or drop credentials automatically. For example, an application
+with its own bounded `libexec/supervisor` can declare:
+
+```python
+from fnpackkit.contracts import Lifecycle, LifecycleCommand, UninstallPolicy
+
+uninstall = UninstallPolicy(
+    protected=("etc/settings.json", "var/*"), transient=(),
+    title="Application data", label="Choose what to keep",
+    retain_label="Keep data", delete_label="Delete application data",
+    nas_user_roots=("var", "tmp"),
+)
+lifecycle = Lifecycle({
+    phase: LifecycleCommand("target", "libexec/supervisor", (action,), run_as="current")
+    for phase, action in {
+        "install_callback": "initialize", "upgrade_callback": "initialize",
+        "main:start": "start", "main:stop": "stop", "main:status": "status",
+        "uninstall_init": "stop",
+    }.items()
+})
+# Pass lifecycle=lifecycle and uninstall=uninstall to Payload.
+```
+
+The supervisor and its actions are application-provided executables, not toolkit
+APIs. The toolkit generates the post-uninstall callback; do not declare another one.
+
+Applications that execute as authenticated NAS users can opt in with
+`UninstallPolicy(..., nas_user_roots=("var", "tmp"))` and `run_as="current"`
+for every lifecycle hook under the declared root privilege. This is an explicit
+application contract: the root lifecycle supervises workers, while application code
+uses `runtime/identity.Resolve`, `runtime/process.Credential` and
+`runtime/securefs.UserDirectory` to launch nonroot NAS-user processes. The toolkit
+does not infer that identity from the package account or automatically run HTTP as root.
+
+In this mode, all application roots and policy/control files remain root controlled.
+Each selected root contains private `0700` directories named by canonical NAS UID;
+children must belong to root or that UID. UID trees cannot be replaced by links,
+cross mounts, contain hardlinked regular files or mix foreign owners. Root-owned
+control files may coexist at the selected root. Preparation validates the immediate
+layout and keeps existing UID contents and ownership intact; it does not recursively
+hand NAS data back to the package account. The application's stopped, locked
+initialization can use `securefs.RestoreUserState` for platform-restored root-owned UID trees.
+
+Retain preserves UID state and removes the temporary application root; explicit
+delete checks then removes only the declared application namespace. Package-account
+transient traversal cannot be declared inside NAS-user roots; put disposable user
+runtime state in the declared temporary root. This policy does not change other
+consumers. Account continuity, stopping writers, root-controlled executable/config
+preparation, worker lifetime and actual browser/file access remain the application's
+responsibility. Root regressions use separate explicit `FNP_TEST_USERNAME` (package)
+and `FNP_TEST_NAS_USERNAME` accounts with synthetic volumes.
+
+## 浏览器验证工具
+
+FPK 业务界面验证通过 BuildFlow 的 `buildflow.browser.resolve_browser` 选择用户级登记的 Node、Playwright 和 Chrome/Chromium。验证回调把 `tools.environment()` 传给测试进程，通过共享 JavaScript 启动/关闭接口运行用例。各应用保留业务断言；FnPackKit 的 `LifecycleFixture` 负责实际归档和隔离部署。浏览器测试依赖不写死其他应用的缓存或系统 Chrome 路径。`browser_assets` 管理随 FPK 交付的网页资源，与构建机的测试浏览器环境分别管理。
+
+## 共享后端控制面板
+
+`runtime/backend` 与 `runtime/runtimepanel` 提供按用户串行控制、手动暂停、独立停机入口和可拖动半隐藏面板。应用适配真实进程及权限，控制资源在实例获取前处理；HTML 注入保留原 CSP nonce。接入、协议和应用扩展见 [共享后端控制面板](docs/runtime-panel.md)。
+
+## 独立本机 Web 服务
+
+需要独立发布前后端的应用可显式接入 `runtime/webbridge`：FPK 保留飞牛入口、可信代理及原有后端启停面板，业务页面、API 和长连接转发到 NAS 本机服务。应用继续拥有运行配置、权限和真实进程管理。接口与验证方式见 [独立本机 Web 服务接入](docs/web-bridge.md)。

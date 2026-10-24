@@ -23,7 +23,8 @@ type User struct {
 	Shell  string
 }
 
-// Request is the entire unprivileged-to-root launcher request protocol.
+// Request identifies a NAS account across trusted application control boundaries.
+// It does not authenticate a transport or grant application access.
 type Request struct {
 	UID  uint32 `json:"uid"`
 	Name string `json:"name"`

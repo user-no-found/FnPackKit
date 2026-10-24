@@ -12,6 +12,7 @@ import unittest
 
 from fnpackkit.contracts import Lifecycle, LifecycleCommand, UninstallPolicy
 from fnpackkit.lifecycle import generate_lifecycle
+from fnpackkit.directories import ensure_directory
 from fnpackkit.uninstall import generate_uninstall, parse_uninstall, validate_uninstall
 
 
@@ -49,12 +50,12 @@ class NativeCleanupTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.root.chmod(0o711)
         self.stage = self.root / 'package'
-        (self.stage / 'cmd/hooks').mkdir(parents=True)
-        (self.stage / 'app/libexec').mkdir(parents=True)
-        (self.stage / 'config').mkdir()
+        ensure_directory(self.root, self.stage / 'cmd/hooks')
+        ensure_directory(self.root, self.stage / 'app/libexec')
+        ensure_directory(self.root, self.stage / 'config')
         (self.stage / 'config/privilege').write_text('{"defaults":{"run-as":"root"}}')
         self.volume = self.root / 'volume'
-        self.volume.mkdir()
+        ensure_directory(self.root, self.volume)
         self.app_id = 'fnpack-fixture'
         self.roots = {}
         dirs = {'etc': ('TRIM_PKGETC', '@appconf'), 'var': ('TRIM_PKGVAR', '@appdata'),
@@ -67,14 +68,14 @@ class NativeCleanupTests(unittest.TestCase):
                     'TRIM_TEMP_LOGFILE': str(self.root / 'error.log')}
         for name, (var, namespace) in dirs.items():
             parent = self.volume / namespace
-            parent.mkdir()
+            ensure_directory(self.root, parent)
             path = parent / self.app_id
             path.mkdir(mode=0o700)
             os.chown(path, self.account.pw_uid, self.account.pw_gid)
             self.roots[name] = path
             self.env[var] = str(path)
         parent = self.volume / '@appcenter'
-        parent.mkdir()
+        ensure_directory(self.root, parent)
         self.app = parent / self.app_id
         self.env['TRIM_APPDEST'] = str(self.app)
         hook = self.stage / 'app/libexec/hook'

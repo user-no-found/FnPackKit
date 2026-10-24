@@ -33,6 +33,7 @@ class UninstallPolicy:
     label: str
     retain_label: str
     delete_label: str
+    nas_user_roots: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

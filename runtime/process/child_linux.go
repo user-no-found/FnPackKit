@@ -82,3 +82,23 @@ func Credential(uid, gid uint32, groups []uint32) (*syscall.SysProcAttr, error) 
 
 // Done closes after the child's process has been reaped.
 func (process *Child) Done() <-chan struct{} { return process.done }
+
+// KillAndWait explicitly ends an owned child and waits for its process handle to be reaped.
+// Callers must establish that ending work abruptly is appropriate for their lifecycle.
+func (process *Child) KillAndWait(timeout time.Duration) error {
+	if timeout <= 0 {
+		return errors.New("child reap timeout must be positive")
+	}
+	if process == nil || !process.Alive() {
+		return nil
+	}
+	if err := process.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	select {
+	case <-process.done:
+		return nil
+	case <-time.After(timeout):
+		return errors.New("killed child has not been reaped")
+	}
+}

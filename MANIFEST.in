@@ -1,4 +1,5 @@
-include LICENSE README.md build.sh setup.sh
-recursive-include runtime *.go go.mod
+include LICENSE README.md AGENTS.md build.sh setup.sh
+recursive-include runtime *.go go.mod *.js *.css
 recursive-include tests *.py *.mjs
-recursive-include web *.js *.css
+recursive-include web *.js *.css *.json
+recursive-include docs *.md

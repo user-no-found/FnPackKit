@@ -12,12 +12,14 @@ def parse_uninstall(data):
     if data is None:
         return None
     fields = {'protected', 'transient', 'title', 'label', 'retain_label', 'delete_label'}
-    if not isinstance(data, dict) or set(data) != fields:
+    if not isinstance(data, dict) or set(data) - fields - {'nas_user_roots'} or not fields <= set(data):
         raise ValueError('uninstall requires protected/transient paths and wizard labels')
     for key in ('protected', 'transient'):
         if not isinstance(data[key], list):
             raise ValueError(f'uninstall.{key} must be an array')
-    policy = UninstallPolicy(**{**data, 'protected': tuple(data['protected']),
+    if 'nas_user_roots' in data and not isinstance(data['nas_user_roots'], (list, tuple)):
+        raise ValueError('uninstall.nas_user_roots must be an array')
+    policy = UninstallPolicy(**{**data, 'nas_user_roots': tuple(data.get('nas_user_roots', ())), 'protected': tuple(data['protected']),
                                'transient': tuple(data['transient'])})
     validate_uninstall(policy)
     return policy
@@ -45,12 +47,17 @@ def validate_uninstall(policy):
         return
     if not isinstance(policy, UninstallPolicy):
         raise ValueError('uninstall must be an UninstallPolicy declaration')
+    if (not isinstance(policy.nas_user_roots, tuple) or len(set(policy.nas_user_roots)) != len(policy.nas_user_roots)
+            or any(value not in ('var', 'tmp') for value in policy.nas_user_roots)):
+        raise ValueError('nas_user_roots must be a unique tuple of var/tmp')
     for field in ('protected', 'transient'):
         values = getattr(policy, field)
         if not isinstance(values, tuple) or len(values) != len(set(values)):
             raise ValueError('uninstall path declarations must be unique tuples')
         for value in values:
             _path(value)
+    if any(value.split('/')[0] in policy.nas_user_roots for value in policy.transient):
+        raise ValueError('NAS-user roots cannot declare package-account transient traversal; tmp is removed as a whole')
     for field in ('title', 'label', 'retain_label', 'delete_label'):
         value = getattr(policy, field)
         if not isinstance(value, str) or not value.strip() or '\x00' in value:
@@ -71,8 +78,9 @@ def generate_uninstall(stage, policy, app_id, lifecycle):
     privilege = json.loads((stage / 'config/privilege').read_text())
     if privilege.get('defaults', {}).get('run-as') != 'root':
         raise ValueError('complete shared uninstall requires root lifecycle privilege')
-    if any(command.run_as != 'package' for command in lifecycle.hooks.values()):
-        raise ValueError('shared uninstall requires package-account application hooks')
+    required_identity = 'current' if policy.nas_user_roots else 'package'
+    if any(command.run_as != required_identity for command in lifecycle.hooks.values()):
+        raise ValueError('shared uninstall hooks do not match their declared state ownership')
     wizard = stage / 'wizard/uninstall'
     helper = stage / 'cmd/hooks/fnpack_uninstall.py'
     if wizard.exists() or helper.exists():
@@ -84,7 +92,7 @@ def generate_uninstall(stage, policy, app_id, lifecycle):
             {'label': policy.retain_label, 'value': 'retain'},
             {'label': policy.delete_label, 'value': 'delete'}]}]}], ensure_ascii=False) + '\n')
     helper.parent.mkdir(parents=True, exist_ok=True)
-    data = {'app_id': app_id, 'transient': policy.transient}
+    data = {'app_id': app_id, 'transient': policy.transient, 'nas_user_roots': policy.nas_user_roots}
     source = Path(__file__).with_name('uninstall_runtime.py').read_text()
     helper.write_text(source.replace('POLICY = None', 'POLICY = ' + repr(data), 1))
     helper.chmod(0o755)

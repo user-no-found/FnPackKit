@@ -5,6 +5,7 @@ import shlex
 
 from .archive import safe_relative
 from .contracts import Lifecycle, LifecycleCommand
+from .directories import ensure_directory
 
 PHASES = ('install_init', 'install_callback', 'upgrade_init', 'upgrade_callback',
           'uninstall_init', 'uninstall_callback', 'config_init', 'config_callback')
@@ -120,12 +121,12 @@ def generate_lifecycle(stage, profile):
     generated = (*PHASES, 'main', 'fnpackkit.sh')
     if any((command_dir / name).exists() for name in generated):
         raise ValueError('generated lifecycle would overwrite custom cmd scripts')
-    command_dir.mkdir(exist_ok=True)
+    ensure_directory(stage, command_dir)
     if any(command.run_as == 'package' for command in profile.hooks.values()):
         helper = command_dir / 'hooks/fnpack_identity.py'
         if helper.exists():
             raise ValueError('generated lifecycle would overwrite identity helper')
-        helper.parent.mkdir(exist_ok=True)
+        ensure_directory(stage, helper.parent)
         helper.write_text(Path(__file__).with_name('lifecycle_identity.py').read_text())
         helper.chmod(0o755)
     header = '#!/bin/sh\nset -eu\n' + FUNCTIONS

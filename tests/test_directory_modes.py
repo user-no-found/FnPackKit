@@ -113,6 +113,27 @@ class DirectoryModesTests(unittest.TestCase):
             ensure_directory(self.root, self.root / "../escape")
         self.assertFalse((external / "escape").exists())
 
+    def test_lifecycle_directories_ignore_umask_and_preserve_existing_private_modes(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                stage = self.root / ("existing" if existing else "new")
+                (stage / "app").mkdir(parents=True)
+                hook = stage / "app/hook"
+                hook.write_text("#!/bin/sh\nexit 0\n")
+                hook.chmod(0o755)
+                if existing:
+                    (stage / "cmd/hooks").mkdir(parents=True)
+                    (stage / "cmd").chmod(0o700)
+                    (stage / "cmd/hooks").chmod(0o700)
+                profile = Lifecycle({"install_callback": LifecycleCommand(
+                    "target", "hook", run_as="package")})
+                with strict_defaults():
+                    generate_lifecycle(stage, profile)
+                expected = 0o700 if existing else 0o755
+                self.assertEqual(mode(stage / "cmd"), expected)
+                self.assertEqual(mode(stage / "cmd/hooks"), expected)
+                self.assertEqual(mode(stage / "cmd/hooks/fnpack_identity.py"), 0o755)
+
     @unittest.skipUnless(os.geteuid() == 0 and os.environ.get("FNP_TEST_USERNAME"),
                          "requires explicit synthetic root/nonroot verification")
     def test_root_namespace_parent_modes_allow_real_nonroot_execution(self):

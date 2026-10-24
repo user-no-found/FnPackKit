@@ -70,7 +70,20 @@ def same_entry(parent, name, previous):
         raise Rejected('entry_changed')
 
 
-def scan(parent, name, device, uid):
+def nas_owner(parent, name, default):
+    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if stat.S_ISDIR(info.st_mode):
+        if (not name.isdecimal() or str(int(name)) != name or
+                not 1000 <= int(name) < 4294967295 or int(name) == 65534 or
+                info.st_uid not in (0, int(name)) or info.st_mode & 0o077):
+            raise Rejected('invalid_nas_user_tree')
+        return int(name)
+    if info.st_uid != 0:
+        raise Rejected('unexpected_control_owner')
+    return default
+
+
+def scan(parent, name, device, uid, nas=False):
     """Reject every unsafe tree before the first removal; never follows links."""
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     check_entry(info, device, uid)
@@ -79,12 +92,12 @@ def scan(parent, name, device, uid):
         try:
             same_entry(parent, name, os.fstat(fd))
             for child in os.listdir(fd):
-                scan(fd, child, device, uid)
+                scan(fd, child, device, nas_owner(fd, child, uid) if nas else uid)
         finally:
             os.close(fd)
 
 
-def remove(parent, name, device, uid):
+def remove(parent, name, device, uid, nas=False):
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     check_entry(info, device, uid)
     if stat.S_ISDIR(info.st_mode):
@@ -92,7 +105,7 @@ def remove(parent, name, device, uid):
         try:
             same_entry(parent, name, os.fstat(fd))
             for child in os.listdir(fd):
-                remove(fd, child, device, uid)
+                remove(fd, child, device, nas_owner(fd, child, uid) if nas else uid)
             same_entry(parent, name, info)
             os.rmdir(name, dir_fd=parent)
         finally:
@@ -177,22 +190,39 @@ class Cleanup:
 
     def targets(self):
         if self.action == 'delete':
-            for parent, fd in self.roots.values():
-                yield parent, self.app
+            for label, (parent, fd) in self.roots.items():
+                yield parent, self.app, label in POLICY.get('nas_user_roots', ())
             return
         if 'tmp' in self.roots:
-            yield self.roots['tmp'][0], self.app
+            yield self.roots['tmp'][0], self.app, 'tmp' in POLICY.get('nas_user_roots', ())
         for value in POLICY['transient']:
             label, *parts = value.split('/')
             if label in self.roots:
-                yield from descendants(self.roots[label][1], parts, self.device, self.uid)
+                for parent, name in descendants(self.roots[label][1], parts, self.device, self.uid):
+                    yield parent, name, False
 
     def preflight(self):
-        for parent, name in self.targets():
-            scan(parent, name, self.device, self.uid)
+        for parent, name, nas in self.targets():
+            scan(parent, name, self.device, self.uid, nas)
+
+    def prepare_nas(self):
+        # UID children remain private NAS-owned trees; authority stays root-owned.
+        for label, (parent, fd) in self.roots.items():
+            if label in POLICY['nas_user_roots']:
+                for name in os.listdir(fd):
+                    nas_owner(fd, name, self.uid)
+            else:
+                scan(parent, self.app, self.device, self.uid)
+        for label, (parent, fd) in self.roots.items():
+            same_entry(parent, self.app, os.fstat(fd))
+            os.fchown(fd, 0, 0)
+            os.fchmod(fd, 0o711 if label in POLICY['nas_user_roots'] else 0o700)
 
     def prepare(self):
         """Platform root mode creates root-owned state; hand private state to the app."""
+        if POLICY.get('nas_user_roots'):
+            self.prepare_nas()
+            return
         selected = [(parent, fd) for parent, fd in self.roots.values()
                     if os.fstat(fd).st_uid == 0]
         for parent, fd in selected:
@@ -257,8 +287,8 @@ class Cleanup:
 
     def cleanup(self):
         self.preflight()
-        for parent, name in self.targets():
-            remove(parent, name, self.device, self.uid)
+        for parent, name, nas in self.targets():
+            remove(parent, name, self.device, self.uid, nas)
         if self.action == 'retain':
             for label in ('home', 'meta'):
                 if label in self.roots:
