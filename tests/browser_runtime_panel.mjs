@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 const evidence=process.env.FNPACKKIT_RUNTIME_EVIDENCE;
 if(evidence)await mkdir(evidence,{recursive:true});
@@ -33,16 +33,16 @@ const server=createServer(async(req,res)=>{
   }
   if(route===prefix+'/_runtime/manifest') {
     res.setHeader('Content-Type','application/json');
-    res.end(JSON.stringify({name:'测试应用',prefix,actions:[{id:'settings',label:'终端显示设置',selector:'#settings-toggle'}]}));return;
+    res.end(JSON.stringify({name:'测试应用',prefix,actions:[{id:'settings',label:'终端显示设置',selector:'#settings-toggle'},{id:'choice',label:'测试选中',selector:'#test-choice',group:'choices',columns:3,audience:'touch',keep_open:true}],layout:{launcher:'.app-control-launcher',avoid:'.app-toolbar'}}));return;
   }
   if(route.startsWith(prefix+'/_runtime/')) {
     const file=route.slice((prefix+'/_runtime/').length);
-    if(!['bootstrap.js','panel.js','drag.js','panel.css'].includes(file)){res.writeHead(404);res.end();return;}
+    if(!['bootstrap.js','panel.js','extensions.js','drag.js','presentation.js','viewport.js','panel.css'].includes(file)){res.writeHead(404);res.end();return;}
     res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'text/javascript');
     res.end(await readFile(new URL(file,root)));return;
   }
   res.setHeader('Content-Type','text/html');
-  res.end('<!doctype html><html lang="zh-CN"'+(paused?' data-runtime-page':'')+'><head><meta charset="utf-8"><script type="module" src="'+prefix+'/_runtime/bootstrap.js"></script></head><body><h1>测试业务</h1><button id="settings-toggle" onclick="document.getElementById(&quot;settings&quot;).hidden=false">显示设置</button><div id="settings" hidden>终端设置</div></body></html>');
+  res.end('<!doctype html><html lang="zh-CN"'+(paused?' data-runtime-page':'')+'><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><script type="module" src="'+prefix+'/_runtime/bootstrap.js"></script></head><body><h1>测试业务</h1><button id="settings-toggle" onclick="document.getElementById(&quot;settings&quot;).hidden=false">显示设置</button><div id="settings" hidden>终端设置</div><div class="app-toolbar" hidden style="position:fixed;bottom:0;left:0;width:100%;height:104px;background:#ccd"><button class="app-control-launcher" disabled onclick="window.dispatchEvent(new Event(&quot;fnpackkit:open-controls&quot;))">应用控制入口</button></div></body></html>');
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const url='http://127.0.0.1:'+server.address().port+prefix+'/';
@@ -148,6 +148,98 @@ try {
   checks.push('idle backend can also be manually paused');
   assert.equal(pageErrors.length,0,pageErrors.join('\n'));
   await page.close();
+  running=true;paused=false;
+  const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+  const mobile=await context.newPage();
+  mobile.on('pageerror',e=>pageErrors.push(e.message));
+  await mobile.goto(url);
+  const mobileToggle=mobile.getByRole('button',{name:'后端控制',exact:true});
+  await mobileToggle.waitFor();
+  await mobile.waitForFunction(()=>document.querySelector('[data-fnpackkit-runtime]')?.dataset.compact==='true');
+  let mobileRect=await mobileToggle.boundingBox();
+  assert(mobileRect.x>=0&&mobileRect.x+mobileRect.width<=390,'phone fallback launcher stays fully visible');
+  await mobile.evaluate(()=>{document.querySelector('.app-toolbar').hidden=false;});
+  const launcher=mobile.getByRole('button',{name:'应用控制入口',exact:true});
+  await launcher.waitFor({state:'visible'});
+  await mobile.waitForFunction(()=>!document.querySelector('.app-control-launcher').disabled);
+  await mobileToggle.waitFor({state:'hidden'});
+  const beforeControls=controls.length;
+  await launcher.tap();
+  const mobileDialog=mobile.getByRole('dialog');
+  await mobileDialog.waitFor();
+  await mobile.waitForFunction(()=>{
+    const panel=document.querySelector('[data-fnpackkit-runtime]').shadowRoot.querySelector('.panel');
+    return panel.getBoundingClientRect().bottom<=document.querySelector('.app-toolbar').getBoundingClientRect().top;
+  });
+  assert.equal(controls.length,beforeControls,'opening controls never sends a backend command');
+  checks.push('touch launcher replaces floating control and sheet avoids application key bar');
+  await mobile.evaluate(()=>{
+    const target=document.createElement('button');target.id='test-choice';target.setAttribute('aria-pressed','false');
+    target.onclick=()=>target.setAttribute('aria-pressed',String(target.getAttribute('aria-pressed')!=='true'));
+    document.body.append(target);
+  });
+  const choice=mobile.getByRole('button',{name:'测试选中',exact:true});
+  await choice.waitFor();await choice.tap();
+  assert.equal(await choice.getAttribute('aria-pressed'),'true');
+  assert(await mobileDialog.isVisible(),'keep-open extension closed the panel');
+  await mobile.evaluate(()=>document.querySelector('#test-choice').disabled=true);
+  await mobile.waitForFunction(()=>document.querySelector('[data-fnpackkit-runtime]').shadowRoot.querySelector('[data-action="choice"]').disabled);
+  await mobile.evaluate(()=>document.querySelector('#test-choice').disabled=false);
+  await mobile.waitForFunction(()=>!document.querySelector('[data-fnpackkit-runtime]').shadowRoot.querySelector('[data-action="choice"]').disabled);
+  await choice.tap();assert.equal(await choice.getAttribute('aria-pressed'),'false');
+  checks.push('grouped touch extension mirrors selected and disabled states and keeps panel open');
+  await mobile.evaluate(()=>window.dispatchEvent(new CustomEvent('fnpackkit:notice',{detail:{message:'应用操作提示'}})));
+  await mobile.getByText('应用操作提示',{exact:true}).waitFor();
+  checks.push('application notice is readable inside open controls');
+
+  await mobile.evaluate(()=>{
+    for(const [key,value] of Object.entries({width:390,height:460,offsetTop:24,offsetLeft:0})) {
+      Object.defineProperty(window.visualViewport,key,{configurable:true,value});
+    }
+    document.querySelector('.app-toolbar').style.bottom='360px';
+    window.visualViewport.dispatchEvent(new Event('resize'));
+    window.dispatchEvent(new Event('resize'));
+  });
+  await mobile.waitForFunction(()=>{
+    const panel=document.querySelector('[data-fnpackkit-runtime]').shadowRoot.querySelector('.panel');
+    const rect=panel.getBoundingClientRect();
+    return rect.top>=24&&rect.bottom<=380;
+  });
+  assert.equal(await mobileDialog.getAttribute('aria-modal'),'true');
+  if(evidence)await mobile.screenshot({path:resolve(evidence,'runtime-mobile-keyboard-geometry.png'),animations:'disabled'});
+  checks.push('synthetic visual viewport and keyboard geometry keep sheet reachable');
+  await mobile.getByRole('button',{name:'关闭控制面板',exact:true}).tap();
+  await mobileDialog.waitFor({state:'hidden'});
+  await mobile.evaluate(()=>{
+    for(const key of ['width','height','offsetTop','offsetLeft'])delete window.visualViewport[key];
+    document.querySelector('.app-toolbar').style.bottom='0px';
+  });
+  await mobile.setViewportSize({width:844,height:390});
+  await launcher.tap();await mobileDialog.waitFor();
+  await mobile.waitForFunction(()=>{
+    const rect=document.querySelector('[data-fnpackkit-runtime]').shadowRoot.querySelector('.panel').getBoundingClientRect();
+    return rect.x>=0&&rect.right<=innerWidth&&rect.bottom<=286;
+  });
+  checks.push('touch landscape sheet remains scrollable above key bar');
+  await mobile.getByRole('button',{name:'关闭控制面板',exact:true}).tap();
+  await mobile.evaluate(()=>{document.querySelector('.app-control-launcher').style.visibility='hidden';});
+  await mobileToggle.waitFor({state:'visible'});
+  await mobile.evaluate(()=>{document.querySelector('.app-control-launcher').style.visibility='';});
+  await mobileToggle.waitFor({state:'hidden'});
+  checks.push('hidden application launcher restores fallback without losing controls');
+  await mobile.evaluate(()=>{document.querySelector('.app-control-launcher').style.transform='translateX(-200px)';});
+  await mobileToggle.waitFor({state:'visible'});
+  await mobile.evaluate(()=>{document.querySelector('.app-control-launcher').style.transform='';});
+  await mobileToggle.waitFor({state:'hidden'});
+  checks.push('offscreen application launcher never removes independent controls');
+  await mobile.evaluate(()=>document.querySelector('.app-toolbar').remove());
+  await mobileToggle.waitFor({state:'visible'});
+  await mobileToggle.tap();await mobileDialog.waitFor();
+  checks.push('missing application launcher restores independent controls');
+  await context.close();
+  assert.equal(pageErrors.length,0,pageErrors.join('\n'));
  });
- console.log(JSON.stringify({checks,pageErrors:pageErrors.length,controls},null,2));
+ const report={checks,pageErrors:pageErrors.length,controls};
+ if(evidence)await writeFile(resolve(evidence,'report.json'),JSON.stringify(report,null,2)+'\n');
+ console.log(JSON.stringify(report,null,2));
 } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

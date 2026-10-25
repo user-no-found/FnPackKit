@@ -24,6 +24,10 @@ type Action struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
 	Selector string `json:"selector"`
+	Group    string `json:"group,omitempty"`
+	Columns  int    `json:"columns,omitempty"`
+	Audience string `json:"audience,omitempty"`
+	KeepOpen bool   `json:"keep_open,omitempty"`
 }
 
 // Command is a bridge-owned control action that works without application HTML.
@@ -58,6 +62,7 @@ type Handler struct {
 	ExecuteCommand CommandFunc
 	Actions        []Action
 	Commands       []Command
+	Layout         *Layout
 }
 
 func (h Handler) Handle(w http.ResponseWriter, r *http.Request, user identity.Request) bool {
@@ -85,11 +90,12 @@ func (h Handler) Handle(w http.ResponseWriter, r *http.Request, user identity.Re
 				Prefix   string    `json:"prefix"`
 				Actions  []Action  `json:"actions"`
 				Commands []Command `json:"commands,omitempty"`
-			}{h.Name, h.Prefix, h.Actions, h.Commands})
+				Layout   *Layout   `json:"layout,omitempty"`
+			}{h.Name, h.Prefix, h.Actions, h.Commands, h.Layout})
 		}
 		return true
 	}
-	allowed := map[string]string{"bootstrap.js": "text/javascript", "panel.js": "text/javascript", "drag.js": "text/javascript", "panel.css": "text/css"}
+	allowed := map[string]string{"bootstrap.js": "text/javascript", "panel.js": "text/javascript", "extensions.js": "text/javascript", "drag.js": "text/javascript", "presentation.js": "text/javascript", "viewport.js": "text/javascript", "panel.css": "text/css"}
 	if kind, ok := allowed[suffix]; ok {
 		data, err := assets.ReadFile("web/" + suffix)
 		if err != nil {

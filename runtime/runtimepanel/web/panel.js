@@ -1,4 +1,5 @@
-import { draggable } from './drag.js';
+import { installPresentation } from './presentation.js';
+import { installExtensions } from './extensions.js';
 
 const states = { running:'运行中', stopped:'已停止 · 按需启动', paused:'已手动停止', starting:'正在启动…', stopping:'正在停止…', unavailable:'状态暂不可用' };
 function element(tag, text, className) {
@@ -61,15 +62,31 @@ export function installPanel(config) {
   const note=element('p','停止仅影响当前账号的后端，保留应用数据。完全退出请使用应用中心。','footnote');
   panel.append(head,status,actions,commandBar,confirm,extensions,notices,refresh,note);
   shadow.append(toggle,panel); document.body.append(host);
-  const drag=draggable(toggle,panel,'fnpackkit-runtime-position:'+config.prefix);
+  const drag=installPresentation(host,toggle,panel,config,()=>{open(false);drag.focusLauncher();});
   function open(value) {
     panel.hidden=!value; toggle.dataset.open=String(value); toggle.setAttribute('aria-expanded',String(value));
     if (value) { drag.place(); refreshStatus(); }
-    else { confirm.hidden=true; pending=null; }
+    else { confirm.hidden=true; pending=null; drag.place(); }
   }
+  addEventListener('fnpackkit:open-controls',()=>{
+    open(true);
+    requestAnimationFrame(()=>{if(!panel.hidden)close.focus({preventScroll:true});});
+  });
+  addEventListener('fnpackkit:notice',event=>{
+    const message=event.detail?.message;
+    if(typeof message==='string' && message.length<=512){notices.textContent=message;drag.place();}
+  });
   toggle.addEventListener('click',()=>open(panel.hidden));
-  close.addEventListener('click',()=>{open(false);toggle.focus();});
-  shadow.addEventListener('keydown',e=>{if(e.key==='Escape'){open(false);toggle.focus();}});
+  close.addEventListener('click',()=>{open(false);drag.focusLauncher();});
+  shadow.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){e.preventDefault();e.stopPropagation();open(false);drag.focusLauncher();}
+    if(e.key==='Tab' && !panel.hidden && host.dataset.compact==='true'){
+      const focusable=[...panel.querySelectorAll('button')].filter(node=>!node.disabled&&node.getClientRects().length);
+      const index=focusable.indexOf(shadow.activeElement);
+      e.preventDefault();e.stopPropagation();
+      focusable[(index+(e.shiftKey?-1:1)+focusable.length)%focusable.length]?.focus();
+    }
+  });
   function render() {
     status.textContent=states[current?.state] || '状态暂不可用';
     toggle.dataset.state=current?.state || 'unavailable';
@@ -125,32 +142,7 @@ export function installPanel(config) {
     }
     finally {busy=false;render();drag.place();}
   }
-  function extensionTarget(selector) {
-    try {
-      const target=document.querySelector(selector);
-      return typeof target?.click==='function' ? target : null;
-    } catch {return null;}
-  }
-  function registerExtensions() {
-    for(const action of config.actions || []) {
-      if(typeof action.id!=='string' || typeof action.label!=='string' || typeof action.selector!=='string') continue;
-      const target=extensionTarget(action.selector);
-      let button=extensions.querySelector('[data-action="'+CSS.escape(action.id)+'"]');
-      if(!target) {if(button)button.disabled=true;continue;}
-      target.hidden=true;target.style.display='none';
-      if(!button) {
-        button=element('button',action.label);button.type='button';button.dataset.action=action.id;
-        button.addEventListener('click',()=>{
-          const currentTarget=extensionTarget(action.selector);
-          if(!currentTarget) {button.disabled=true;return;}
-          open(false);currentTarget.click();
-        });extensions.append(button);
-      }
-      button.disabled=false;
-    }
-  }
-  const observer=new MutationObserver(registerExtensions);
-  observer.observe(document.body,{childList:true,subtree:true});registerExtensions();
+  installExtensions(extensions,config.actions,()=>open(false),()=>drag.place());
   document.addEventListener('visibilitychange',()=>{if(!document.hidden && !panel.hidden)refreshStatus();});
   if(document.documentElement.hasAttribute('data-runtime-page')) open(true);
   else refreshStatus();

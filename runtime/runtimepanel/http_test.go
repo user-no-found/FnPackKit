@@ -96,7 +96,7 @@ func TestCustomCommandNeedsManifestAndConfirmation(t *testing.T) {
 
 func TestEmbeddedResourcesAndStoppedNavigation(t *testing.T) {
 	h := Handler{Prefix: "/app/test", Name: "<safe>"}
-	for _, name := range []string{"bootstrap.js", "panel.js", "drag.js", "panel.css", "manifest"} {
+	for _, name := range []string{"bootstrap.js", "panel.js", "drag.js", "presentation.js", "viewport.js", "panel.css", "manifest"} {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest("GET", "/app/test/_runtime/"+name, nil)
 		if !h.Handle(w, r, identity.Request{}) || w.Code != 200 || w.Body.Len() == 0 {
