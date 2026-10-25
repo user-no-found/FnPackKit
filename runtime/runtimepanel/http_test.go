@@ -126,7 +126,10 @@ func TestResponseInjectionPreservesHTMLAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := io.ReadAll(r.Body)
-	if bytes.Count(data, []byte("/_runtime/bootstrap.js")) != 1 || !bytes.Contains(data, []byte("<body>work</body>")) || r.ContentLength != int64(len(data)) || r.Header.Get("ETag") != "" {
+	if bytes.Count(data, []byte("/_runtime/bootstrap.js")) != 1 ||
+		bytes.Count(data, []byte("data-fnpackkit-loader")) != 1 ||
+		!bytes.Contains(data, []byte("<body>work")) ||
+		r.ContentLength != int64(len(data)) || r.Header.Get("ETag") != "" {
 		t.Fatal(string(data))
 	}
 	r.Body = io.NopCloser(strings.NewReader("compressed"))

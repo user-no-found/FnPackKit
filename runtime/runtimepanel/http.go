@@ -31,6 +31,16 @@ type Command struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
 	Confirm bool   `json:"confirm,omitempty"`
+	Warning string `json:"warning,omitempty"`
+}
+
+// UpdateFrontendCommandID is the shared command used by apps that can refresh
+// their static frontend without stopping the backend.
+const UpdateFrontendCommandID = "update-frontend"
+
+// UpdateFrontendCommand returns the standard "update frontend" command descriptor.
+func UpdateFrontendCommand() Command {
+	return Command{ID: UpdateFrontendCommandID, Label: "更新前端", Confirm: true}
 }
 
 type ExecuteFunc func(context.Context, identity.Request, backend.Command) (backend.Snapshot, error)

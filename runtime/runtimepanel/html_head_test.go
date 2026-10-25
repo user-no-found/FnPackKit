@@ -24,6 +24,7 @@ func TestInjectionLocatesDocumentHeadOutsideHTMLText(t *testing.T) {
 		`<!-- <script type="module" src="/app/test/_runtime/bootstrap.js"></script> -->`,
 	}
 	marker := `<script type="module" src="/app/test/_runtime/bootstrap.js"></script>`
+	loader := string(classicLoader("/app/test", ""))
 	for _, content := range contents {
 		t.Run(content, func(t *testing.T) {
 			body := `<!doctype html><html><head>` + content + `</HEAD ><body>business</body></html>`
@@ -37,6 +38,7 @@ func TestInjectionLocatesDocumentHeadOutsideHTMLText(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := strings.Replace(body, `</HEAD >`, marker+`</HEAD >`, 1)
+			want = strings.Replace(want, `</body>`, loader+`</body>`, 1)
 			if string(first) != want {
 				t.Fatalf("HTML text was modified: got %s; want %s", first, want)
 			}
@@ -49,6 +51,27 @@ func TestInjectionLocatesDocumentHeadOutsideHTMLText(t *testing.T) {
 				t.Fatal("repeated injection duplicated the control shell")
 			}
 		})
+	}
+}
+
+func TestClassicLoaderSkippedWhenPageDefinesCSP(t *testing.T) {
+	body := `<!doctype html><html><head></head><body>business</body></html>`
+	response := &http.Response{StatusCode: 200, Header: make(http.Header),
+		Body: io.NopCloser(strings.NewReader(body))}
+	response.Header.Set("Content-Type", "text/html")
+	response.Header.Set("Content-Security-Policy", "script-src 'none'")
+	if err := Inject(response, "/app/test"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "data-fnpackkit-loader") {
+		t.Fatal("inline loader must not be injected into a CSP page")
+	}
+	if !strings.Contains(string(got), `_runtime/bootstrap.js`) {
+		t.Fatal("module loader should remain available for CSP pages")
 	}
 }
 

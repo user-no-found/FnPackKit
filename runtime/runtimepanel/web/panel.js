@@ -30,6 +30,7 @@ export function installPanel(config) {
   const head = element('header'); head.append(title,close);
   const status = element('p','正在读取状态…','status'); status.setAttribute('role','status'); status.setAttribute('aria-live','polite');
   const actions = element('div',null,'actions');
+  const commandBar = element('div',null,'commands');
   const buttons = {};
   const commands = new Map();
   let busy=false;
@@ -48,15 +49,17 @@ export function installPanel(config) {
   for (const item of Array.isArray(config.commands) ? config.commands : []) {
     if (!item || typeof item.id!=='string' || typeof item.label!=='string' || commands.has(item.id)) continue;
     if (['start','stop','restart'].includes(item.id)) continue;
-    const command={id:item.id,label:item.label,confirm:Boolean(item.confirm)};
+    const command={id:item.id,label:item.label,confirm:Boolean(item.confirm),
+      warning:typeof item.warning==='string'?item.warning:''};
     const button=element('button',command.label); button.type='button'; buttons[command.id]=button;
-    button.addEventListener('click',()=>requestAction(command.id)); actions.append(button);
+    button.dataset.command=command.id;
+    button.addEventListener('click',()=>requestAction(command.id)); commandBar.append(button);
     commands.set(command.id,command);
   }
   const refresh=element('button','刷新状态','text'); refresh.type='button'; refresh.addEventListener('click',()=>refreshStatus());
   const extensions=element('div',null,'extensions');
   const note=element('p','停止仅影响当前账号的后端，保留应用数据。完全退出请使用应用中心。','footnote');
-  panel.append(head,status,actions,confirm,extensions,notices,refresh,note);
+  panel.append(head,status,actions,commandBar,confirm,extensions,notices,refresh,note);
   shadow.append(toggle,panel); document.body.append(host);
   const drag=draggable(toggle,panel,'fnpackkit-runtime-position:'+config.prefix);
   function open(value) {
@@ -96,7 +99,8 @@ export function installPanel(config) {
     if(action==='start' || command && !command.confirm) {execute(action);return;}
     pending=action;confirm.hidden=false;
     if(command) {
-      warning.textContent=command.label+'会停止当前后端正在运行的任务，同步最新代码并按需重启。应用数据会保留。是否继续？';
+      warning.textContent=command.warning ||
+        command.label+'会停止当前后端正在运行的任务，同步最新代码并按需重启。应用数据会保留。是否继续？';
       proceed.textContent='确认'+command.label;
     } else {
       warning.textContent=(action==='restart'?'重启':'停止')+'后端会结束当前账号正在运行的终端、AI 或其他后台任务。应用数据会保留。是否继续？';
@@ -116,7 +120,7 @@ export function installPanel(config) {
       location.replace(config.prefix+'/');
     } catch {
       notices.textContent=command
-        ? command.label+'未完成，请刷新状态或查看 @appdata/lodeworks/data/update.log。'
+        ? command.label+'未完成，请刷新状态或查看应用数据目录下的更新日志。'
         : '操作未完成，后端可能仍在处理请求或保存数据。请刷新状态后重试。';
     }
     finally {busy=false;render();drag.place();}

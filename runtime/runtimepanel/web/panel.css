@@ -18,7 +18,11 @@ header { display:flex; align-items:center; justify-content:space-between; gap:12
 .close { border:0; padding:0 8px; font-size:24px; line-height:1.2; }
 .status { margin:14px 0; color:#315de7; }
 .actions { display:flex; flex-wrap:wrap; gap:8px; }
+.actions button { flex:1 1 0; }
 .actions button:first-child { background:#315de7; color:white; border-color:#315de7; }
+.commands { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+.commands:empty { display:none; }
+.commands button { flex:1 1 0; font-weight:600; }
 .confirm { margin-top:14px; border-radius:10px; padding:12px; background:#fff2ee; color:#923821; }
 .confirm p { margin:0 0 10px; }
 .confirm button { margin-right:8px; }
