@@ -17,7 +17,7 @@ from .staging import digest
 def build(project_path, *, steps=None, payload=None, verify=None, artifacts=None,
           fnpack="fnpack", metadata=None, ui=None, build_version=None,
           next_version=False, channel=None):
-    """Select a project version before loading its adapter and publishing FPKs."""
+    """Seed from installation, then select under lock before loading the adapter."""
     validate_project(load_project(project_path, engine_version()))
 
     def configure(project):

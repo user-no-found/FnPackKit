@@ -57,7 +57,7 @@ class PackageContracts(unittest.TestCase):
             (root / "payload.json").write_text(json.dumps(payload))
 
         reset()
-        good = build(project, ui=lambda event: None)
+        good = build(project, build_version="1.0.0", ui=lambda event: None)
         self.assertIn("ui/config", inspect_fpk(good.output / payload["artifact_name"])[1])
         success = (root / ".build/last-success.json").read_bytes()
         checks.append({"valid_gateway_root_and_extensions": True})
@@ -66,7 +66,7 @@ class PackageContracts(unittest.TestCase):
             reset()
             mutate()
             with self.subTest(name=name), self.assertRaisesRegex(BuildError, expected):
-                build(project, ui=lambda event: None)
+                build(project, build_version="1.0.0", ui=lambda event: None)
             self.assertEqual(success, (root / ".build/last-success.json").read_bytes())
             checks.append({"rejected": name})
 
@@ -110,14 +110,14 @@ class PackageContracts(unittest.TestCase):
         reset()
         capabilities({"js-sdk": True})
         with self.assertRaisesRegex(ValueError, "unknown fnpackkit.capabilities"):
-            build(project, ui=lambda event: None)
+            build(project, build_version="1.0.0", ui=lambda event: None)
         checks.append({"rejected": "capability typo"})
         reset()
         capabilities({"js_sdk": True})
         (template / "manifest").write_text(manifest + "micro_app=true\n")
         payload["artifact_name"] = "contractfixture_frontend.fpk"
         (root / "payload.json").write_text(json.dumps(payload))
-        build(project, ui=lambda event: None)
+        build(project, build_version="1.0.0", ui=lambda event: None)
         checks.append({"frontend_sdk_without_backend_scope": True})
         reset()
         capabilities({"js_sdk": True, "api_scopes": ["trim.system.getPlatformConfig"]})
@@ -125,6 +125,6 @@ class PackageContracts(unittest.TestCase):
         change_json(template / "config/resource", "api-scope", ["trim.system.getPlatformConfig"])
         payload["artifact_name"] = "contractfixture_capable.fpk"
         (root / "payload.json").write_text(json.dumps(payload))
-        build(project, ui=lambda event: None)
+        build(project, build_version="1.0.0", ui=lambda event: None)
         checks.append({"declared_capabilities": True})
         (root / "checks.json").write_text(json.dumps(checks, indent=2) + "\n")

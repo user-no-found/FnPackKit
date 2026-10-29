@@ -48,7 +48,7 @@ class BrandingFPK(unittest.TestCase):
                    "values": {"APP_ID": "brandfixture", "VERSION": "1.0.0", "PLATFORM": "all"},
                    "artifact_name": "brandfixture.fpk"}
         (root / "payload.json").write_text(json.dumps(payload))
-        result = build(project, ui=lambda event: None)
+        result = build(project, build_version="1.0.0", ui=lambda event: None)
         artifact = result.output / "brandfixture.fpk"
         outer, inner = inspect_fpk(artifact)
         approved_hash = hashlib.sha256(variant).hexdigest()
@@ -62,12 +62,12 @@ class BrandingFPK(unittest.TestCase):
         success = (root / ".build/last-success.json").read_bytes()
         (template / "ICON.PNG").write_bytes(variant)
         with self.assertRaisesRegex(BuildError, "branding icon mapping conflicts"):
-            build(project, ui=lambda event: None)
+            build(project, build_version="1.0.0", ui=lambda event: None)
         self.assertEqual((root / ".build/last-success.json").read_bytes(), success)
         (template / "ICON.PNG").unlink()
         Image.new("RGBA", (32, 32)).save(root / "approved64.png")
         with self.assertRaisesRegex(BuildError, "64"):
-            build(project, ui=lambda event: None)
+            build(project, build_version="1.0.0", ui=lambda event: None)
         self.assertEqual((root / ".build/last-success.json").read_bytes(), success)
         (root / "checks.json").write_text(json.dumps({
             "artifact": str(artifact), "explicit_variant_sha256": approved_hash,

@@ -57,7 +57,7 @@ class PublisherFPK(unittest.TestCase):
                     "values": {"APP_ID": app_id, "VERSION": "1.0.0", "PLATFORM": "x86"},
                     "artifact_name": f"{app_id}.fpk", "required": ["app/LICENSE"],
                 }))
-                result = build(project, fnpack=executable, ui=lambda event: None)
+                result = build(project, build_version="1.0.0", fnpack=executable, ui=lambda event: None)
                 artifact = result.output / f"{app_id}.fpk"
                 with tarfile.open(artifact) as package:
                     fields = manifest_fields(package.extractfile("manifest").read().decode("utf-8"))
@@ -82,7 +82,7 @@ class PublisherFPK(unittest.TestCase):
                 text = source_manifest + invalid
                 manifest_path.write_text(text, encoding="utf-8")
                 with self.assertRaisesRegex(BuildError, "invalid or duplicate manifest field"):
-                    build(project, fnpack=executable, ui=lambda event: None)
+                    build(project, build_version="1.0.0", fnpack=executable, ui=lambda event: None)
                 self.assertEqual(manifest_path.read_text(encoding="utf-8"), text)
                 self.assertEqual((project_root / ".build" / "last-success.json").read_bytes(), success)
                 staged = list((project_root / ".build").glob("*/fpk/*/stage/manifest"))

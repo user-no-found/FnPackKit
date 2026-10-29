@@ -67,10 +67,10 @@ def plan(project):
             self.assertTrue(all(path.is_file() and path.name.endswith((".fpk", ".fpk.sha256"))
                                 for path in (root / "output").iterdir()))
 
-        for flags, expected in [(["--next-version", "--channel", "stable"], "1.2.4"),
-                                (["--next-version", "--channel", "test"], "1.2.4-01"),
+        for flags, expected in [(["--next-version", "--channel", "stable"], "0.0.1"),
+                                (["--next-version", "--channel", "test"], "0.0.1-01"),
                                 (["--build-version", "2.4.6-02"], "2.4.6-02"),
-                                (["--next-version", "--channel", "stable"], "2.4.6")]:
+                                (["--next-version", "--channel", "stable"], "2.4.7")]:
             result = subprocess.run(command + flags, cwd=root, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("已安装版本: 未安装", result.stderr)
@@ -100,9 +100,9 @@ def plan(project):
             if process.poll() is None:
                 process.kill()
                 process.wait()
-        self.assertIn("项目版本: 2.4.6", output.decode())
+        self.assertIn("项目版本: 2.4.7", output.decode())
         self.assertIn("构建类型", output.decode())
-        check("2.4.6-01")
+        check("2.4.7-01")
         previous = (root / ".build/last-success.json").read_bytes()
         mismatch = Payload(template, [], {"APP_ID": "example", "VERSION": "0.0.1", "PLATFORM": "x86"}, "wrong.fpk")
         with self.assertRaisesRegex(BuildError, "payload VERSION must equal"):

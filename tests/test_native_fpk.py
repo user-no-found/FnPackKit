@@ -44,7 +44,7 @@ class NativeFPK(unittest.TestCase):
         (root / "payload.json").write_text(json.dumps(manifest))
         candidates = discover([root], max_depth=1)
         self.assertEqual([item.app_id for item in candidates.candidates], ["fixture"])
-        result = build(project, fnpack=executable, ui=lambda event: None)
+        result = build(project, build_version="1.0.0", fnpack=executable, ui=lambda event: None)
         artifact = result.output / manifest["artifact_name"]
         with tarfile.open(artifact) as package:
             from fnpackkit.formats import manifest_fields
@@ -65,7 +65,7 @@ class NativeFPK(unittest.TestCase):
         bad = Payload(template, [PayloadFile(root / "hello.txt", "../escape")],
                       manifest["values"], "bad.fpk")
         with self.assertRaises(BuildError):
-            build(project, steps=[], payload=[payload, bad], fnpack=executable, ui=lambda event: None)
+            build(project, build_version="1.0.0", steps=[], payload=[payload, bad], fnpack=executable, ui=lambda event: None)
         self.assertEqual(previous, (root / ".build/last-success.json").read_bytes())
         self.assertTrue(artifact.is_file())
         self.assertFalse((root / "escape").exists())
@@ -83,11 +83,11 @@ class NativeFPK(unittest.TestCase):
             self.fail("extra reports evaluated after failed verification")
 
         with self.assertRaisesRegex(BuildError, "application verification rejected"):
-            build(project, fnpack=executable, verify=reject_actual_package,
+            build(project, build_version="1.0.0", fnpack=executable, verify=reject_actual_package,
                   artifacts=forbidden_reports, ui=lambda event: None)
         self.assertEqual(previous, (root / ".build/last-success.json").read_bytes())
         with self.assertRaisesRegex(BuildError, "verify must return None"):
-            build(project, fnpack=executable, verify=lambda ctx, packaged: False,
+            build(project, build_version="1.0.0", fnpack=executable, verify=lambda ctx, packaged: False,
                   ui=lambda event: None)
         self.assertEqual(previous, (root / ".build/last-success.json").read_bytes())
 
@@ -117,7 +117,7 @@ def plan(project):
         project.write_text(json.dumps(declaration))
         manifest["artifact_name"] = "fixture_1.0.0_verified.fpk"
         (root / "payload.json").write_text(json.dumps(manifest))
-        verified = build(project, fnpack=executable, ui=lambda event: None)
+        verified = build(project, build_version="1.0.0", fnpack=executable, ui=lambda event: None)
         self.assertTrue((verified.output / manifest["artifact_name"]).is_file())
         records = verified.metadata["application_reports"]
         self.assertEqual(records[0]["name"], "checks/application-check.json")
