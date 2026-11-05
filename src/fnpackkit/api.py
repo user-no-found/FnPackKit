@@ -11,17 +11,22 @@ from .contracts import Payload
 from .installed import installed_version
 from .manifest import read_payload, validate_project
 from .packaging import package
+from .optional_packages import selection_prepare, validate_selection
 from .staging import digest
 
 
 def build(project_path, *, steps=None, payload=None, verify=None, artifacts=None,
           fnpack="fnpack", metadata=None, ui=None, build_version=None,
-          next_version=False, channel=None):
+          next_version=False, channel=None, features=None, no_features=False):
     """Seed from installation, then select under lock before loading the adapter."""
     validate_project(load_project(project_path, engine_version()))
 
     def configure(project):
-        return _configuration(project, steps, payload, verify, artifacts, fnpack, metadata)
+        optional = selection_prepare(project, features=features, no_features=no_features)
+        result = _configuration(project, steps, payload, verify, artifacts, fnpack, metadata)
+        if optional is not None:
+            result["prepare"] = optional
+        return result
 
     return engine.build(project_path, configure=configure, ui=ui,
                         build_version=build_version, next_version=next_version,
@@ -45,7 +50,12 @@ def _configuration(project, steps, payload, verify, reports, fnpack, metadata):
             raise ValueError(f"{name} must be a callable")
     package_artifacts = []
 
+    def check_optional(ctx):
+        if "optional_packages" in config:
+            validate_selection(ctx.metadata["optional_packages"], runner=ctx.runner)
+
     def package_payloads(ctx):
+        check_optional(ctx)
         declarations = payload(ctx) if callable(payload) else payload
         if declarations is None:
             value = config["payload"].replace("{work}", str(ctx.work)).replace("{project}", str(project.root))
@@ -82,6 +92,7 @@ def _configuration(project, steps, payload, verify, reports, fnpack, metadata):
             records.append({"name": name, "path": str(path.resolve()), "sha256": digest(path)})
         if records:
             ctx.metadata["application_reports"] = records
+        check_optional(ctx)
         return package_artifacts
 
     pipeline = [*steps, Step("FPK 渲染、封包与实际归档验证", package_payloads)]

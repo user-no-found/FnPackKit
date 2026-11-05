@@ -25,6 +25,10 @@ def main(argv=None):
     versions.add_argument("--build-version", help="选择并写回 project.json 的构建版本")
     versions.add_argument("--next-version", action="store_true", help="使用所选发布类型的下一版本")
     parser.add_argument("--channel", choices=("stable", "test"), help="正式版或测试版")
+    features = parser.add_mutually_exclusive_group()
+    features.add_argument("--features", action="append", metavar="IDS",
+                          help="显式选择可选功能id，逗号分隔，可重复")
+    features.add_argument("--no-features", action="store_true", help="显式不选择可选功能")
     args = parser.parse_args(argv)
     try:
         if args.discover:
@@ -36,8 +40,11 @@ def main(argv=None):
             return 2 if result.warnings else 0
         project = select_project(args.project, args.workspace, target="fpk", max_depth=args.max_depth,
                                  max_directories=args.max_directories, validator=load_fpk_project)
+        requested = None if args.features is None else [
+            value.strip() for group in args.features for value in group.split(",")]
         result = build(project.path, fnpack=args.fnpack, build_version=args.build_version,
-                       next_version=args.next_version, channel=args.channel)
+                       next_version=args.next_version, channel=args.channel,
+                       features=requested, no_features=args.no_features)
         print(result.output)
         return 0
     except BuildError as exc:

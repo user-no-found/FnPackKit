@@ -10,6 +10,7 @@ from .lifecycle import parse_lifecycle, validate_lifecycle
 from .metadata import tool_version
 from .uninstall import parse_uninstall, validate_uninstall
 from .config_checks import validate_capabilities
+from .optional_contracts import enabled as optional_enabled
 
 
 def validate_project(project):
@@ -20,11 +21,12 @@ def validate_project(project):
         raise ValueError("fnpackkit.schema must be 1")
     if "fpk" not in project.config["targets"]:
         raise ValueError("project does not declare buildflow target fpk")
-    unknown = set(config) - {"schema", "requires", "payload", "adapter", "capabilities"}
+    unknown = set(config) - {"schema", "requires", "payload", "adapter", "capabilities", "optional_packages"}
     if unknown:
         raise ValueError(f"unknown fnpackkit fields: {sorted(unknown)}")
     check_requirement(config.get("requires", ""), tool_version())
     validate_capabilities(config.get("capabilities", {}))
+    optional_enabled(config)
     if bool(config.get("payload")) == bool(config.get("adapter")):
         raise ValueError("declare exactly one of fnpackkit.payload or fnpackkit.adapter")
     for key in ("payload", "adapter"):
