@@ -43,18 +43,22 @@ func (b *Bridge) proxy(endpoint *Endpoint, id identity.Request) *httputil.Revers
 				p.Out.Header.Set("X-Trim-Userid", strconv.FormatUint(uint64(id.UID), 10))
 				p.Out.Header.Set("X-Trim-Username", id.Name)
 			}
-			p.Out.Header.Set("Accept-Encoding", "identity")
-			if document(p.In, b.prefix) {
-				p.Out.Header.Del("If-None-Match")
-				p.Out.Header.Del("If-Modified-Since")
+			if b.panel.Execute != nil {
+				p.Out.Header.Set("Accept-Encoding", "identity")
+				if document(p.In, b.prefix) {
+					p.Out.Header.Del("If-None-Match")
+					p.Out.Header.Del("If-Modified-Since")
+				}
 			}
 		},
 		ModifyResponse: func(response *http.Response) error {
 			if err := endpoint.rewriteResponse(response, b.prefix); err != nil {
 				return err
 			}
-			if err := runtimepanel.Inject(response, b.prefix); err != nil {
-				return err
+			if b.panel.Execute != nil {
+				if err := runtimepanel.Inject(response, b.prefix); err != nil {
+					return err
+				}
 			}
 			if strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/html") {
 				response.Header.Set("Cache-Control", "no-store")

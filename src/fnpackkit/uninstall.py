@@ -12,7 +12,7 @@ def parse_uninstall(data):
     if data is None:
         return None
     fields = {'protected', 'transient', 'title', 'label', 'retain_label', 'delete_label'}
-    if not isinstance(data, dict) or set(data) - fields - {'nas_user_roots'} or not fields <= set(data):
+    if not isinstance(data, dict) or set(data) - fields - {'nas_user_roots', 'state_owner'} or not fields <= set(data):
         raise ValueError('uninstall requires protected/transient paths and wizard labels')
     for key in ('protected', 'transient'):
         if not isinstance(data[key], list):
@@ -47,6 +47,10 @@ def validate_uninstall(policy):
         return
     if not isinstance(policy, UninstallPolicy):
         raise ValueError('uninstall must be an UninstallPolicy declaration')
+    if policy.state_owner not in ('package', 'root'):
+        raise ValueError('uninstall.state_owner must be package or root')
+    if policy.state_owner == 'root' and policy.nas_user_roots:
+        raise ValueError('root state ownership cannot include NAS-user roots')
     if (not isinstance(policy.nas_user_roots, tuple) or len(set(policy.nas_user_roots)) != len(policy.nas_user_roots)
             or any(value not in ('var', 'tmp') for value in policy.nas_user_roots)):
         raise ValueError('nas_user_roots must be a unique tuple of var/tmp')
@@ -78,7 +82,7 @@ def generate_uninstall(stage, policy, app_id, lifecycle):
     privilege = json.loads((stage / 'config/privilege').read_text())
     if privilege.get('defaults', {}).get('run-as') != 'root':
         raise ValueError('complete shared uninstall requires root lifecycle privilege')
-    required_identity = 'current' if policy.nas_user_roots else 'package'
+    required_identity = 'current' if policy.nas_user_roots or policy.state_owner == 'root' else 'package'
     if any(command.run_as != required_identity for command in lifecycle.hooks.values()):
         raise ValueError('shared uninstall hooks do not match their declared state ownership')
     wizard = stage / 'wizard/uninstall'
@@ -92,7 +96,8 @@ def generate_uninstall(stage, policy, app_id, lifecycle):
             {'label': policy.retain_label, 'value': 'retain'},
             {'label': policy.delete_label, 'value': 'delete'}]}]}], ensure_ascii=False) + '\n')
     helper.parent.mkdir(parents=True, exist_ok=True)
-    data = {'app_id': app_id, 'transient': policy.transient, 'nas_user_roots': policy.nas_user_roots}
+    data = {'app_id': app_id, 'transient': policy.transient, 'nas_user_roots': policy.nas_user_roots,
+            'state_owner': policy.state_owner}
     source = Path(__file__).with_name('uninstall_runtime.py').read_text()
     helper.write_text(source.replace('POLICY = None', 'POLICY = ' + repr(data), 1))
     helper.chmod(0o755)
@@ -111,7 +116,7 @@ def generate_uninstall(stage, policy, app_id, lifecycle):
         file.write_text(source[:start] + call + source[start:])
     file = stage / 'cmd/main'
     source = file.read_text()
-    for action in ('start', 'stop', 'status'):
+    for action in ('start',):
         phase = 'main:' + action
         start = source.index(f'fnp_phase={phase}')
         call = (prefix + 'prepare 2>&1); then :; else\n'

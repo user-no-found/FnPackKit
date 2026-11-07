@@ -16,10 +16,11 @@ let paused=false;
 let starts=0;
 let stops=0;
 const controls=[];
+let source=null;
 const server=createServer(async(req,res)=>{
   const route=new URL(req.url,'http://localhost').pathname;
   res.setHeader('Cache-Control','no-store');
-  const snapshot=()=>({schema:1,state:running?'running':paused?'paused':'stopped',paused});
+  const snapshot=()=>({schema:1,state:running?'running':paused?'paused':'stopped',paused,...(source?{source}:{})});
   if(route==='/__fixture_idle' && req.method==='POST'){running=false;paused=false;res.end('ok');return;}
   if(route===prefix+'/_runtime/control') {
     if(req.method==='POST') {
@@ -37,7 +38,7 @@ const server=createServer(async(req,res)=>{
   }
   if(route.startsWith(prefix+'/_runtime/')) {
     const file=route.slice((prefix+'/_runtime/').length);
-    if(!['bootstrap.js','panel.js','extensions.js','drag.js','presentation.js','viewport.js','panel.css'].includes(file)){res.writeHead(404);res.end();return;}
+    if(!['bootstrap.js','panel.js','source.js','extensions.js','drag.js','presentation.js','viewport.js','panel.css'].includes(file)){res.writeHead(404);res.end();return;}
     res.setHeader('Content-Type',file.endsWith('.css')?'text/css':'text/javascript');
     res.end(await readFile(new URL(file,root)));return;
   }
@@ -56,6 +57,21 @@ try {
   await toggle.waitFor();
   await toggle.click();await page.getByText('运行中',{exact:true}).waitFor();
   assert.equal(starts,0);checks.push('initial status never starts backend');
+  assert.equal(await page.locator('.source-summary').isVisible(),false);
+  source={workspace:{commit:'a'.repeat(40),fingerprint:'b'.repeat(64),dirty:true},
+    running:{commit:'c'.repeat(40),fingerprint:'d'.repeat(64),dirty:false},changed:true};
+  await page.getByRole('button',{name:'刷新状态',exact:true}).click();
+  await page.getByText('本地代码：aaaaaaaaaaaa · 有本地修改（bbbbbbbb）',{exact:true}).waitFor();
+  await page.getByText('运行版本：cccccccccccc',{exact:true}).waitFor();
+  await page.getByText('本地代码已变化，需构建并重启。',{exact:true}).waitFor();
+  source={unavailable:true};
+  await page.getByRole('button',{name:'刷新状态',exact:true}).click();
+  await page.getByText('源码状态暂不可读，请稍后刷新。',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'停止后端',exact:true}).isEnabled(),true);
+  source=null;
+  await page.getByRole('button',{name:'刷新状态',exact:true}).click();
+  await page.locator('.source-summary').waitFor({state:'hidden'});
+  checks.push('workspace and startup versions differ, dirty content is identified, inspection failure retains controls');
   if(evidence)await page.screenshot({path:resolve(evidence,'runtime-panel.png'),animations:'disabled'});
   await page.getByRole('button',{name:'终端显示设置',exact:true}).click();
   await page.locator('#settings').waitFor({state:'visible'});

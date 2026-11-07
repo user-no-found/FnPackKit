@@ -12,7 +12,34 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/user-no-found/FnPackKit/runtime/backend"
+	"github.com/user-no-found/FnPackKit/runtime/gatewaypolicy"
 )
+
+func streamingFixture(t *testing.T, endpoint *Endpoint, mode string) *fixture {
+	t.Helper()
+	f := newFixture(t, endpoint)
+	if mode != "managed" {
+		config := Config{Name: "Local relay", Gateway: gatewaypolicy.Config{
+			Prefix: testPrefix, AllowSameOriginFetch: true,
+			HandshakeGrants: &gatewaypolicy.GrantConfig{Lifetime: time.Minute, Capacity: 32, PerUser: 8},
+		}, WebSocketPaths: []string{"/ws", "/hmr"}}
+		var bridge *Bridge
+		var err error
+		if mode == "controlled" {
+			service := &controlledRelayService{relayService: &relayService{endpoint: endpoint}, state: backend.Snapshot{Schema: 1, State: "running"}}
+			bridge, err = NewControlledRelay(config, service)
+		} else {
+			bridge, err = NewRelay(config, &relayService{endpoint: endpoint})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		*f.bridge = *bridge
+	}
+	return f
+}
 
 func echoWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, buffer, err := w.(http.Hijacker).Hijack()
@@ -46,13 +73,19 @@ func echoWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func TestWebSocketGrantAndEchoThroughBridge(t *testing.T) {
+	for _, mode := range []string{"managed", "relay", "controlled"} {
+		t.Run(mode, func(t *testing.T) { checkWebSocket(t, mode) })
+	}
+}
+
+func checkWebSocket(t *testing.T, mode string) {
 	endpoint := endpointFor(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.Header.Get("Sec-WebSocket-Protocol"), "fpk-gateway") {
 			t.Error("handshake proof leaked to business service")
 		}
 		echoWebSocket(w, r)
 	}, EndpointConfig{StripPrefix: true})
-	f := newFixture(t, endpoint)
+	f := streamingFixture(t, endpoint, mode)
 	r := f.request("POST", "/_gateway/grant/ws", "")
 	r.Header.Set("Origin", "https://external-nas.example")
 	response, body := f.do(t, r)
@@ -98,6 +131,12 @@ func TestWebSocketGrantAndEchoThroughBridge(t *testing.T) {
 }
 
 func TestSSEFlushesBeforeUpstreamCompletes(t *testing.T) {
+	for _, mode := range []string{"managed", "relay", "controlled"} {
+		t.Run(mode, func(t *testing.T) { checkSSEFlush(t, mode) })
+	}
+}
+
+func checkSSEFlush(t *testing.T, mode string) {
 	release := make(chan struct{})
 	endpoint := endpointFor(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -108,7 +147,7 @@ func TestSSEFlushesBeforeUpstreamCompletes(t *testing.T) {
 		case <-r.Context().Done():
 		}
 	}, EndpointConfig{StripPrefix: true})
-	f := newFixture(t, endpoint)
+	f := streamingFixture(t, endpoint, mode)
 	defer close(release)
 	response, err := f.client.Do(f.request("GET", "/events", ""))
 	if err != nil {

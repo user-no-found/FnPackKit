@@ -1,16 +1,51 @@
 # 独立本机 Web 服务接入
 
-`runtime/webbridge` 是可选 Go 组合接口，适用于在 NAS 本机独立部署、经常修改前后端的应用。FPK 提供稳定的飞牛桌面入口和轻量桥接进程，业务页面、API 和程序由独立服务提供。应用显式调用 `webbridge.New` 后使用这一入口；其他应用继续使用自己的集成方式。
+`runtime/webbridge` 是可选 Go 组合接口，适用于本机独立部署的应用。`NewControlledRelay` 让 FPK 提供管理面板、发起启停/更新，并委托本地服务执行；`NewRelay` 只透传原生界面；`New` 则由桥接直接托管目标。前后端语言不受 Go 桥接库限制。
+
+控制共享实例时可设置 `Config.ControlScope: runtimepanel.ScopeShared`，使面板准确提示共享操作的影响；这不改变应用的身份校验或暂停门。省略时维持按账号的说明。纯透传 `NewRelay` 不接受面板 scope 或其他面板配置。
+
+所有 FPK 共用 [公共部署与访问契约](fpk-access.md)：默认在宿主机运行，经 fnOS Web 统一访问，不要求局域网业务直连或额外登录。WebBridge 是实现本机接入的可选组合方式，不是所有 FPK 必须增加的一层代理；下述机器认证、平台授权和来源校验不属于额外局域网用户登录。
+
+前后端和数据离开 FPK 独立运行、同时需要 FPK 控制后端时，先读 [独立本地应用契约](independent-application.md)：FPK 使用 `NewControlledRelay`，通过 Control 管理本地服务。需要 Git 更新时，在本地服务中使用 [本地仓库管理器](local-repository.md)。不要把“不承载业务逻辑”解释为“没有 FPK 面板或管理能力”。
 
 访问链路为飞牛桌面 iframe → fnOS 统一网关 → FPK Unix Socket → `webbridge.Bridge` → 本机业务服务。前端、API、WebSocket 和 SSE 均保留在同一个公开应用前缀下。平台契约见官方[应用入口](https://developer.fnnas.com/docs/core-concepts/app-entry/)及[统一网关](https://developer.fnnas.com/docs/core-concepts/gateway-registration/)文档；具体 fnOS 版本和实际移动端/FN Connect 路径需由消费应用验证。
 
 ## 应用与包的职责
 
-FPK 保留 manifest、图标、入口、资源/权限声明、桥接二进制与生命周期脚本。业务程序和前端资源在应用自己管理的独立部署目录或容器中，用户数据与程序更新分别管理。业务服务发布、前端重新构建及缓存更新不需要重新封包；修改桥接二进制、内嵌控制面板或包声明仍涉及 FPK 更新。
+独立 Relay 部署使用 `NewControlledRelay` 或 `NewRelay` 时，FPK 保留 manifest、图标、入口、资源/权限声明、桥接二进制与生命周期脚本。业务程序和前端资源在应用自己管理的本机独立部署目录或容器中，用户数据与程序更新分别管理。业务服务发布、前端重新构建及缓存更新不需要重新封包；修改桥接二进制、内嵌控制面板或包声明仍涉及 FPK 更新。
 
-飞牛应用中心的启动、停止和卸载管理桥接进程。应用自行决定这些生命周期操作是否也停止独立业务服务及保留哪些数据。应用中心显示包版本；业务版本由独立服务返回，二者不必相同。
+托管 `New` 约定由桥接直接管理实际进程，不强制业务位于包外；业务是否随包交付及数据策略由应用决定，不能将独立 Relay 的目录要求套用到全部 FPK。
 
-## 公共接入契约
+独立 Relay 模式下，飞牛应用中心对 FPK 包的启动、停止和卸载只管理桥接进程；这与 FPK 面板中的“停止/重启/更新后端”不同，后者确实控制本地业务。独立模式数据不随 FPK 包卸载删除；托管 `New` 的生命周期策略由应用定义。应用中心显示包版本，业务版本由实际服务返回。
+
+## FPK 管理独立后端：NewControlledRelay
+
+```go
+type ControlledService interface {
+    Authorize(*http.Request, identity.Request) error
+    Acquire(context.Context, identity.Request, string) (*webbridge.Endpoint, error)
+    Control(context.Context, identity.Request, backend.Command) (backend.Snapshot, error)
+}
+```
+
+`NewControlledRelay(config, service)` 在 FPK 中提供面板和管理路由，允许 Actions/Commands。内置启停、重启及声明的更新命令统一交给 Control；可用 `NewControlClient(endpoint, localControlPath, timeout)` 调用任意语言后端的本地 HTTP 管理 API。不能另设 FPK 本地 ExecuteCommand 执行同一动作。
+
+状态与暂停标志由本地管理服务返回，FPK 不创建第二套业务进程状态。业务停止时仍有 FPK 控制页；运行页面可注入共享面板。后端更新应停止旧进程并启动配置分支的最新有效构建，返回实际版本，不是假刷新页面。完整协议和示例见 [独立本地应用](independent-application.md)。
+
+## 只转发：NewRelay
+
+```go
+type Service interface {
+    Authorize(*http.Request, identity.Request) error
+    Acquire(context.Context, identity.Request, string) (*webbridge.Endpoint, error)
+}
+```
+
+`webbridge.NewRelay(config, service)` 不要求业务启停接口，不创建暂停控制器或注入面板。`Acquire` 只选择已配置的本机服务，不构建、更新或启动业务；包括 `/_runtime/` 在内的管理路由转发到本地服务，后者验证并执行命令、提供面板资源和真实状态。FPK 配置中的 Actions、Commands 和 ExecuteCommand 会被拒绝。
+
+三种方式共享可信 Unix peer、平台权限、Origin、Cookie、端点及流转发边界。仅纯透传 `NewRelay` 保留上游 HTML 正文和压缩、不生成面板或停止页；它是可选方式，不能把其限制套用到有管理能力的 `NewControlledRelay`。平台 `/_gateway/` 路由保留在桥接中。
+
+## 托管接入：New
 
 导入 `github.com/user-no-found/FnPackKit/runtime/webbridge`。应用实现：
 
@@ -73,9 +108,9 @@ if relative == "/api" || strings.HasPrefix(relative, "/api/") {
 return app.frontendEndpoint(user)
 ```
 
-这种路径选择与端点配置由应用拥有。两类请求都会经过同一用户的暂停门，任何独立转发路径都不能绕过它。
+这种路径选择与端点配置由应用拥有。托管方式中两类请求都经过同一用户暂停门；Relay 则由本地管理服务提供统一状态，不能让页面、API 或流绕过本地的停止状态。
 
-## 连接飞牛网关与控制面板
+## 连接飞牛网关与托管面板
 
 ```go
 bridgeConfig := webbridge.Config{
@@ -112,7 +147,7 @@ return server.Serve(trusted)
 
 浏览器使用实际公开 origin 和应用前缀构造 HTTP/WS 地址。前端框架的 base、路由和 HMR 公开路径也应配置到此前缀；桥接不修改任意 HTML/JS 中写死的根路径，不自动实现框架热更新或后端热重载。生产前端仍需构建并发布最新资源，后端代码仍需由其服务管理器重载或重启。
 
-普通 WebSocket 使用既有 Origin 策略，无须声明 `WebSocketPaths`。需要一次性握手票据时，在调用 `webbridge.New` 前同时设置票据配置和唯一的路径；值继续来自应用配置：
+普通 WebSocket 使用既有 Origin 策略，无须声明 `WebSocketPaths`。需要握手票据时，三个构造入口都在创建前配置票据及路径；值来自应用配置：
 
 ```go
 bridgeConfig.Gateway.HandshakeGrants = &gatewaypolicy.GrantConfig{
@@ -141,7 +176,7 @@ from buildflow.browser import resolve_browser
 
 tools = resolve_browser()
 subprocess.run(
-    ["go", "test", "-race", "-count=1", "-run", "TestBrowserIndependentDeploymentAndControls", "-v", "./webbridge"],
+    ["go", "test", "-race", "-count=1", "-run", "TestBrowserIndependentDeploymentAndControls|TestBrowserNativeManagementThroughFPKRelay", "-v", "./webbridge", "./localrepo"],
     cwd="runtime", check=True,
     env={**os.environ, **tools.environment(), "FNPACKKIT_BROWSER_E2E": "1"},
 )

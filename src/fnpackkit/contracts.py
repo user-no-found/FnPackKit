@@ -34,6 +34,7 @@ class UninstallPolicy:
     retain_label: str
     delete_label: str
     nas_user_roots: tuple[str, ...] = ()
+    state_owner: str = "package"
 
 
 @dataclass(frozen=True)

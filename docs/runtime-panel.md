@@ -2,6 +2,8 @@
 
 `runtime/backend` 管理每个已认证用户的手动暂停门；`runtime/runtimepanel` 提供 Go 嵌入的 JS/CSS、控制接口、HTML 注入和停机页面。业务后端停止时，轻量网关继续提供启动入口。整个应用的完全关闭由飞牛应用中心负责。
 
+本面板遵循所有 FPK 共用的 [公共部署与访问契约](fpk-access.md)，通过 fnOS Web 的同源应用前缀工作，不要求额外局域网站点或登录。面板不决定业务是否随包安装；平台授权和本机控制接口保护不能因无局域网访问而省略。
+
 需要独立部署本机 Web 服务的应用可使用 [webbridge 组合接口](web-bridge.md) 连接这些机制。`Handler.Recovery` 在获取或连接失败时提供独立恢复页，保留控制资源并返回 503，不将失败描述为停止成功或已保存数据。
 
 ## 应用接入
@@ -11,6 +13,8 @@
 `backend.New(target)` 创建一个网关生命周期内共享的控制器。所有普通业务实例获取必须经过 `Controller.Use(ctx, identity, acquire)`；手动操作通过 `Controller.Execute`。不能只给控制按钮接入共享状态，而让普通请求绕过暂停门。
 
 `runtimepanel.Handler{Prefix: prefix, Name: displayName, Execute: controller.Execute}` 使用应用现有的网关前缀和项目显示名称。先运行可信 Unix peer、NAS 身份、应用授权、Origin、路径和会话验证，再调用 `Handle`；组件不替代这些边界。控制资源路由必须在业务实例获取前处理。
+
+单个共享后端可显式设置 `Handler.Scope: runtimepanel.ScopeShared`；使用 WebBridge 时传入 `Config.ControlScope`。面板会提示操作影响共享会话的所有使用者，停止/重启确认也使用共享范围说明。省略该字段或设置 `ScopeUser` 时保留当前账号的说明。scope 只声明界面中的实际操作范围，不合并后端控制状态、不授予权限；应用仍负责共享实例的授权、统一暂停门和真实控制。
 
 若 `Use` 返回 `backend.ErrPaused`，调用 `Handler.Unavailable`：文档导航获得独立停机页面，业务请求和 WebSocket 获得 503。页面与控制资源不依赖已停止的业务服务。状态轮询和自动重连不会唤醒手动暂停的实例。
 
@@ -23,15 +27,23 @@
 | 路径/方法 | 用途 |
 | --- | --- |
 | `/_runtime/control` GET | 不唤醒后端的状态查询 |
-| `/_runtime/control` POST | `{action, confirm}` 意图，仅接受 start、stop、restart |
+| `/_runtime/control` POST | `{action, confirm, password?}` 意图，接受 start、stop、restart 及服务端明确声明的控制命令 |
 | `/_runtime/manifest` GET | 当前应用名称、前缀和 UI 扩展声明 |
 | `/_runtime/{bootstrap.js,panel.js,drag.js,presentation.js,viewport.js,panel.css}` GET/HEAD | 已认证的共享控制资源 |
 
-POST 使用 `Content-Type: application/json`、`X-FnPackKit-Control: 1`，并通过应用原有的 Origin 策略。stop/restart 要求 `confirm: true`。控制体不接受 UID、用户名、进程地址、凭据或 shell 命令。身份作为服务端已验证参数传入。
+POST 使用 `Content-Type: application/json`、`X-FnPackKit-Control: 1`，并通过应用原有的 Origin 策略。stop/restart 要求 `confirm: true`。控制体不接受 UID、用户名、进程地址、持久凭据或 shell 命令；身份作为服务端已验证参数传入。支持一次性授权的控制端可接收仅用于本次操作的 `password`，不支持授权的旧 `ExecuteCommand` 回调会拒绝该字段。
 
 状态包括 running、stopped、paused、starting、stopping、unavailable。失败不会冒充停止成功；停止或重启失败时，暂停门继续阻止普通请求创建新实例。显式启动成功后解除暂停。
 
 手动暂停保存在当前网关进程内，同一用户的所有标签页共享；应用服务重启后恢复正常按需启动。空闲回收不会设置手动暂停，各应用仍负责自己的空闲策略和活跃请求判定。停止会结束正在执行的任务，保留数据与历史不等于恢复被终止的进程。
+
+## 一次性授权输入
+
+普通页面加载、状态查询、打开面板及一般操作确认不创建密码输入框。只有用户发起的操作收到控制端 `problem.password_required: true`，且该交互仍有效、面板仍打开时，才挂载授权输入框。共享面板不在业务页面中保留隐藏的密码输入控件，也不读取或重写业务输入框。
+
+提交前清空并移除原密码控件；取消、关闭、操作成功或终止失败也清理授权界面。新的授权挑战创建空白控件，不复用旧值。关闭面板会使当前授权交互失效，迟到的响应或聚焦回调不会重新创建隐藏密码框；关闭界面不等于取消服务端已接受的操作。面板不将一次性密码写入 URL、浏览器存储或持久配置。
+
+面板资源嵌入应用的 Go 网关程序。修改 FnPackKit 源码不会热更新已安装应用；接入应用必须使用所选完整源码重新编译网关、构建 FPK 并升级，才能使用新的面板资源，无需用户屏蔽脚本或关闭浏览器密码管理器。
 
 ## 交互与扩展
 

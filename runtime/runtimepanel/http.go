@@ -30,7 +30,7 @@ type Action struct {
 	KeepOpen bool   `json:"keep_open,omitempty"`
 }
 
-// Command is a bridge-owned control action that works without application HTML.
+// Command is a server-owned control action that works without business HTML.
 type Command struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
@@ -54,12 +54,16 @@ type ExecuteFunc func(context.Context, identity.Request, backend.Command) (backe
 type CommandFunc func(context.Context, identity.Request, string) (backend.Snapshot, error)
 
 // Handler receives only an identity already authenticated and authorized by the application.
-// Gateway Origin policy must run before Handle. No body can select a user or executable.
+// The application's Origin policy must run before Handle. No body selects a user or executable.
 type Handler struct {
 	Prefix         string
 	Name           string
+	Scope          Scope
 	Execute        ExecuteFunc
 	ExecuteCommand CommandFunc
+	// CommandHandler receives one-shot authorization for declared commands.
+	// Legacy CommandFunc callbacks never receive passwords.
+	CommandHandler ExecuteFunc
 	Actions        []Action
 	Commands       []Command
 	Layout         *Layout
@@ -69,6 +73,10 @@ func (h Handler) Handle(w http.ResponseWriter, r *http.Request, user identity.Re
 	base := h.Prefix + "/_runtime/"
 	if !strings.HasPrefix(r.URL.Path, base) {
 		return false
+	}
+	if !h.Scope.Valid() {
+		http.Error(w, "invalid runtime control scope", http.StatusInternalServerError)
+		return true
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -91,11 +99,12 @@ func (h Handler) Handle(w http.ResponseWriter, r *http.Request, user identity.Re
 				Actions  []Action  `json:"actions"`
 				Commands []Command `json:"commands,omitempty"`
 				Layout   *Layout   `json:"layout,omitempty"`
-			}{h.Name, h.Prefix, h.Actions, h.Commands, h.Layout})
+				Scope    Scope     `json:"scope,omitempty"`
+			}{h.Name, h.Prefix, h.Actions, h.Commands, h.Layout, h.Scope})
 		}
 		return true
 	}
-	allowed := map[string]string{"bootstrap.js": "text/javascript", "panel.js": "text/javascript", "extensions.js": "text/javascript", "drag.js": "text/javascript", "presentation.js": "text/javascript", "viewport.js": "text/javascript", "panel.css": "text/css"}
+	allowed := map[string]string{"bootstrap.js": "text/javascript", "panel.js": "text/javascript", "scope.js": "text/javascript", "source.js": "text/javascript", "extensions.js": "text/javascript", "drag.js": "text/javascript", "presentation.js": "text/javascript", "viewport.js": "text/javascript", "panel.css": "text/css"}
 	if kind, ok := allowed[suffix]; ok {
 		data, err := assets.ReadFile("web/" + suffix)
 		if err != nil {
@@ -131,9 +140,10 @@ func (h Handler) control(w http.ResponseWriter, r *http.Request, user identity.R
 			http.Error(w, "invalid control request", 403)
 			return
 		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(&command) != nil || decoder.Decode(new(any)) != io.EOF || command.Action == "status" {
+		if decoder.Decode(&command) != nil || decoder.Decode(new(any)) != io.EOF || command.Action == "status" ||
+			len(command.Password) > 1024 || strings.ContainsAny(command.Password, "\x00\r\n") {
 			http.Error(w, "invalid control command", 400)
 			return
 		}
@@ -144,7 +154,7 @@ func (h Handler) control(w http.ResponseWriter, r *http.Request, user identity.R
 	}
 	builtin := command.Action == "status" || command.Action == "start" || command.Action == "stop" || command.Action == "restart"
 	custom, declared := h.command(command.Action)
-	if !builtin && (!declared || h.ExecuteCommand == nil) {
+	if !builtin && (!declared || (h.ExecuteCommand == nil && h.CommandHandler == nil)) {
 		http.Error(w, "invalid control command", 400)
 		return
 	}
@@ -156,7 +166,13 @@ func (h Handler) control(w http.ResponseWriter, r *http.Request, user identity.R
 	var err error
 	if builtin {
 		result, err = h.Execute(r.Context(), user, command)
+	} else if h.CommandHandler != nil {
+		result, err = h.CommandHandler(r.Context(), user, command)
 	} else {
+		if command.Password != "" {
+			http.Error(w, "authorization not supported", 400)
+			return
+		}
 		result, err = h.ExecuteCommand(r.Context(), user, command.Action)
 	}
 	code := 200
@@ -170,11 +186,12 @@ func (h Handler) control(w http.ResponseWriter, r *http.Request, user identity.R
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(struct {
 		backend.Snapshot
-		Failed bool `json:"failed,omitempty"`
-	}{result, err != nil})
+		Failed  bool             `json:"failed,omitempty"`
+		Problem *backend.Problem `json:"problem,omitempty"`
+	}{result, err != nil, backend.DescribeFailure(err)})
 }
 
-var pausedPage = template.Must(template.New("paused").Parse(`<!doctype html><html lang="zh-CN" data-runtime-page><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Name}}</title><script type="module" src="{{.Prefix}}/_runtime/bootstrap.js"></script></head><body style="margin:0;background:#f4f6fa;color:#182230;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:32rem;padding:2rem"><h1>{{.Name}}</h1><p>{{.Message}}</p><p>点击悬浮按钮，使用后端控制继续操作。</p><p style="color:#667085;font-size:14px">轻量控制服务仍在运行。完全关闭应用请使用飞牛应用中心。</p></main></body></html>`))
+var pausedPage = template.Must(template.New("paused").Parse(`<!doctype html><html lang="zh-CN" data-runtime-page><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{.Name}}</title><script type="module" src="{{.Prefix}}/_runtime/bootstrap.js"></script></head><body style="margin:0;background:#f4f6fa;color:#182230;font:16px system-ui;display:grid;place-items:center;min-height:100vh"><main style="max-width:32rem;padding:2rem"><h1>{{.Name}}</h1><p>{{.Message}}</p><p>点击悬浮按钮，使用后端控制继续操作。</p><p style="color:#667085;font-size:14px">轻量控制服务仍在运行。</p></main></body></html>`))
 
 // Unavailable serves an independent control shell only for document navigation.
 func (h Handler) Unavailable(w http.ResponseWriter, r *http.Request) {

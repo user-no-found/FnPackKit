@@ -220,6 +220,9 @@ class Cleanup:
 
     def prepare(self):
         """Platform root mode creates root-owned state; hand private state to the app."""
+        if POLICY.get('state_owner') == 'root':
+            self.prepare_root()
+            return
         if POLICY.get('nas_user_roots'):
             self.prepare_nas()
             return
@@ -284,6 +287,60 @@ class Cleanup:
             same_entry(parent, self.app, os.fstat(fd))
             os.fchown(fd, self.uid, self.gid)
             os.fchmod(fd, 0o700)
+
+    def prepare_root(self):
+        """Keep explicitly privileged bridge state and its executable root-owned."""
+        entries = [(parent, self.app, True) for parent, _ in self.roots.values()]
+        parent = os.open('@appcenter', FLAGS, dir_fd=self.volume_fd)
+        try:
+            trusted(os.fstat(parent))
+            try:
+                os.stat(self.app, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                runtime = os.environ['TRIM_APPDEST']
+                if any(m == runtime or m.startswith(runtime + '/') for m in self.mounts):
+                    raise Rejected('mounted_runtime_entry')
+                entries.append((parent, self.app, False))
+            for directory, name, _ in entries:
+                scan(directory, name, self.device, self.uid)
+
+            def ownership(directory, name, private):
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                check_entry(info, self.device, self.uid)
+                if stat.S_ISLNK(info.st_mode):
+                    return
+                # Runtime IPC has an application-owned access policy. It is not
+                # immutable payload and must keep its active socket/FIFO group.
+                if not private and (stat.S_ISSOCK(info.st_mode) or stat.S_ISFIFO(info.st_mode)):
+                    return
+                fd = os.open(name, FLAGS if stat.S_ISDIR(info.st_mode) else
+                             os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+                try:
+                    current = os.fstat(fd)
+                    check_entry(current, self.device, self.uid)
+                    if (current.st_ino != info.st_ino or current.st_dev != info.st_dev or
+                            stat.S_ISLNK(current.st_mode)):
+                        raise Rejected('entry_changed')
+                    same_entry(directory, name, current)
+                    if stat.S_ISDIR(info.st_mode):
+                        for child in os.listdir(fd):
+                            ownership(fd, child, private)
+                        os.fchmod(fd, 0o700 if private else 0o755)
+                    elif stat.S_ISREG(current.st_mode):
+                        # Installer defaults may add group/other access. Keep
+                        # private state private and runtime files non-writable.
+                        mode = (current.st_mode & 0o700) | 0o600 if private else current.st_mode & 0o755
+                        os.chmod('/proc/self/fd/' + str(fd), mode)
+                    os.chown('/proc/self/fd/' + str(fd), 0, 0)
+                finally:
+                    os.close(fd)
+
+            for directory, name, private in entries:
+                ownership(directory, name, private)
+        finally:
+            os.close(parent)
 
     def cleanup(self):
         self.preflight()

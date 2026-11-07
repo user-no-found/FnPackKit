@@ -4,6 +4,18 @@ AI 接入或维护本项目时，先阅读 [公共接口选择与接入约束](A
 
 FnPackKit 使用 BuildFlow 的同一套步骤执行器、日志、进程取消和产物发布机制，在原生 Linux 上生成并验证 fnOS FPK。应用提供自己的构建步骤、模板与 payload 声明；工具不保存应用清单，也不包含应用身份、图标或专属二进制规则。最终应用直接链接 `runtime/` 中的 Go 共享机制，NAS 无需安装 FnPackKit。
 
+## 所有 FPK 的公共部署与访问
+
+所有 FPK 都以 fnOS 宿主机承载应用为默认部署方式；有 Web 界面时，页面、API 和长连接默认经 fnOS Web／统一网关的同源应用前缀访问，不要求浏览器直连局域网业务端口。业务服务使用受保护的 Unix Socket 或回环连接，不因接入 FPK 而额外建立局域网账号、登录或设备配对体系。fnOS 身份、应用权限、来源校验及本机管理接口保护仍须保留；已有业务登录按应用实际需要处理。
+
+局域网接口、外部回调和中转可以按明确用途扩展，但不是默认使用的前提，也不自动扩大业务监听范围。上述规则适用于原生随包应用和独立本地应用，不要求把所有业务移到包外或统一使用 WebBridge；无 Web 界面的服务不必创建 UI。完整边界和验收要求见 [FPK 公共部署与访问契约](docs/fpk-access.md)。
+
+## Docker 按需使用
+
+**非必要不使用 Docker。** 默认优先原生应用和常规运行时依赖；确有容器化或复杂环境隔离需求时，复用 [Docker 共享接口](docs/docker.md) 的安装前检查、Go 生命周期和数据卷归属保护。此能力是显式选用的，不自动安装 Docker，也不把所有 FPK 容器化。fnOS 内置 Docker 不应写成 `install_dep_apps=docker`。
+
+## 初始化与构建入口
+
 Python 要求 3.11 或更新。`pyproject.toml` 是 FnPackKit 工具版本的唯一来源。依赖方向为应用 → FnPackKit → BuildFlow；普通 Linux/Windows 项目可以直接使用 BuildFlow。Python 包声明 BuildFlow 的 GitHub 来源，本地源码初始化不安装系统环境或下载工具。
 
 首次使用源码 checkout 时执行一次初始化，不需要手动 `export`：
@@ -87,6 +99,8 @@ manifest 的 `platform=x86/arm/all` 与文件名的目标架构属于不同契�
 
 封包前会检查 manifest 的 `platform`（`x86`、`arm` 或 `all`）、第三方来源和布尔字段，以及 desktop 目录、启动入口、图标引用之间的一致性。`config/privilege`、`config/resource` 和向导文件使用有大小上限、拒绝重复键的 JSON 读取；检查已知权限/资源字段和路径，保留未知官方扩展字段。允许 `root` 模式；未声明 UI 的服务包无需创建入口。向导自定义环境字段不能占用 `TRIM_` 前缀。普通端口支持 `${wizard_port}`，URL 支持向导变量；网关和 CGI 的 `protocol/port` 不参与对应路由检查。网关前缀必须属于本应用，socket 为文件名，入口 URL 留在前缀内。
 
+端口、CGI 和网关的静态声明检查不证明实际监听范围或访问链路；支持显式端口字段不表示默认应开放局域网。运行部署仍须按 [公共访问契约](docs/fpk-access.md#封包与实际运行的验证边界) 验证，封包不会自动改写应用的监听配置。
+
 应用按实际使用显式声明可选能力：
 
 ```json
@@ -166,6 +180,10 @@ exec "$FNPACKKIT_PATH/build.sh" --project "$project_root/project.json" "$@"
 
 显式的仅封包模式可以复用生产目录，但须校验其生产输入与内容证据：固定业务源码、应用自身编译/生成源码、实际链接的共享源码、工具链和构建选项，以及完整生产文件清单、字节及相关权限。不能只核对上游提交或一个运行时文件，就将修改后的本地代码与旧二进制拼成新包。构建中输入发生变化时拒绝发布；缓存缺失、过期或无法证明来源时要求对应生产步骤重建。
 
+## 可选构建包
+
+应用显式声明 `fnpackkit.optional_packages={"schema":1}` 后，在版本确认之后、构建标题和步骤之前扫描固定 `optional/`，通过共享前台交互显示功能名/id、多选并冻结本次输入；默认全部安装，回车接受全部，`0` 不安装，`q` 取消。没有候选不出现菜单，也不增加选择 Step；未声明时原流水线不变。包使用独立私密 Git 仓库，命名为 `<主项目origin仓库名>Optional-<功能id>`，由用户自行 clone，不自动获取或更新。非 TTY 默认启用全部；`--features id[,id...]` 或 `--no-features` 可显式覆盖，项目薄入口原样透传。`selection(ctx)` 提供完整 JSON 快照，`apply_source(ctx, target)` 只将预检过的冻结 patches/files 投影到应用提供的本次私有 Git 源码 stage；`validate_selection(record)` 用于发布前与缓存核验。声明、安全边界、精确接口及远端隐私验证见 [可选构建包](docs/optional-packages.md)。
+
 ## Python 构建适配
 
 复杂应用用 `"adapter": "scripts/build.py:plan"` 替代 `"payload"`。二者互斥。只有显式选中并发起构建后，工具才加载该应用的受信 Python 文件；adapter 是与构建用户同权的代码，不是安全沙箱。`plan(project)` 接受 BuildFlow `Project`，返回 `steps`、`payload` 及可选 `metadata`、`verify`、`artifacts`：
@@ -190,7 +208,7 @@ def plan(project):
     return {"steps": [Step("编译", compile_application)], "payload": payload}
 ```
 
-`payload(ctx)` 可返回一个 `Payload`、多个架构的 `list[Payload]`，或 manifest 的 `Path`。全部步骤共享 `ctx.project`、`ctx.work`、`ctx.output`、`ctx.runner` 和 `ctx.metadata`。应用负责单次解析上游修订，后续构建复用同一固定输入，并把来源、工具链和验证边界放入 metadata。应用薄入口与统一 CLI 均调用 `fnpackkit.api.build(project_path, *, steps=None, payload=None, verify=None, artifacts=None, fnpack="fnpack", metadata=None, ui=None, build_version=None, next_version=False, channel=None)`；显式传 steps/payload 可直接嵌入已有构建程序。低层 `fnpackkit.packaging.package(ctx, payload, fnpack="fnpack")` 返回 BuildFlow `Artifact` 列表。
+`payload(ctx)` 可返回一个 `Payload`、多个架构的 `list[Payload]`，或 manifest 的 `Path`。全部步骤共享 `ctx.project`、`ctx.work`、`ctx.output`、`ctx.runner` 和 `ctx.metadata`。应用负责单次解析上游修订，后续构建复用同一固定输入，并把来源、工具链和验证边界放入 metadata。应用薄入口与统一 CLI 均调用 `fnpackkit.api.build(project_path, *, steps=None, payload=None, verify=None, artifacts=None, fnpack="fnpack", metadata=None, ui=None, build_version=None, next_version=False, channel=None, features=None, no_features=False)`；显式传 steps/payload 可直接嵌入已有构建程序。低层 `fnpackkit.packaging.package(ctx, payload, fnpack="fnpack")` 返回 BuildFlow `Artifact` 列表。
 
 应用需要在实际 FPK 上运行原生或浏览器验证时，提供 `verify(ctx, package_artifacts)`。它在所有包生成并通过共享归档检查后、发布前执行，收到本次构建的 `tuple[Artifact, ...]`，仅包含 FPK 和校验和文件；通过 `artifact.name.endswith(".fpk")` 选择实际包。成功返回 `None`，失败抛异常；包括 `False` 在内的其他返回值会被拒绝，不会误标成功。
 
@@ -212,6 +230,8 @@ FPK 成功前会检查实际外层 tar 和内层 app.tgz，拒绝路径穿越、
 | `auth` | `Headers(http.Header)` 在已受信连接上严格解析单值 FN 身份头；`Check(ctx, Request, Authorizer)` 要求调用者提供当前应用授权策略，缺少策略拒绝。 |
 | `securefs` | `RootPath`、`RootDirectory`、`UserDirectory` 核对根控制的路径及用户私有目录；`RestoreUserState` 在离线生命周期中恢复升级后变为 root 的用户状态。 |
 | `process` | `Start` 管理实际子进程句柄及一次 Wait；`Child.Done/Alive/Terminate/Result` 管理生命周期；显式 `KillAndWait(timeout)` 通过持有的进程句柄结束子进程并等待回收，只有调用方确认可中止当前工作时使用，不改变 `Terminate` 的默认行为；`Credential` 拒绝 root 和无效 UID/GID。 |
+| `webassets` | `Negotiate`、`Response` 与 `FileServer` 为明确的内置静态资源提供 gzip 和私有 ETag 缓存；保留鉴权、页面注入、接口和流的边界。见 [静态资源传输](docs/web-assets.md)。 |
+| `localrepo` | 在独立本地管理服务中使用 `New(ctx, Config, Runtime)` 管理 Git 工作区、构建与进程；FPK 提供面板，通过 Control 操作管理器并读取真实结果。见 [本地仓库运行](docs/local-repository.md)。 |
 
 `auth.ValidateMode` 只接受显式 `per-user-process` 或 `trusted-proxy` 集成声明；它不替应用完成认证对接。任意 TCP 请求或客户端头不能直接调用 `Headers` 后获得可信身份。NSS 账号存在不等于 FN 账号已启用、应用权限有效或 UID 从未被重用；这些需调用者的权威授权来源。长连接寿命提供有界重验机会，不表示权限撤销立即生效。上游账号绑定、角色、Cookie、会话撤销、数据权限及业务验证由应用负责。未知认证模式明确拒绝，不能为任意 Web 应用宣称无适配免登。
 
@@ -328,6 +348,8 @@ requires root execution. `LifecycleFixture` remains available for ordinary nonro
 
 Default package-account lifecycle preparation restores only the compiled application namespace: data roots become private and owned by the package account, and the runtime root permits its gateway socket. When fnOS has changed a data root to root ownership, the validated tree is handed back recursively without following links. Ordinary already-owned roots do not trigger tree traversal. The platform may remove program files despite a rejected callback; callback errors protect data cleanup and do not promise to cancel the platform operation.
 
+Generated `main:status` and `main:stop` dispatch directly without ownership preparation. Preparation remains in startup/install/configuration/upgrade phases. Root-owned payload repair preserves active runtime sockets and FIFOs, whose access policy belongs to the application; status polling must not rewrite those IPC permissions.
+
 
 Choose the mode from the application's execution and data contract:
 
@@ -400,4 +422,6 @@ FPK 业务界面验证通过 BuildFlow 的 `buildflow.browser.resolve_browser` �
 
 ## 独立本机 Web 服务
 
-需要独立发布前后端的应用可显式接入 `runtime/webbridge`：FPK 保留飞牛入口、可信代理及原有后端启停面板，业务页面、API 和长连接转发到 NAS 本机服务。应用继续拥有运行配置、权限和真实进程管理。接口与验证方式见 [独立本机 Web 服务接入](docs/web-bridge.md)。
+前后端和生产数据在 FPK 之外运行、但用户要通过 FPK 控制后端时，使用 `webbridge.NewControlledRelay`：FPK 提供管理面板，可启动、停止、重启和更新实际后端；Control 将操作交给本地常驻管理服务，更新会停止旧后端并启动最新有效构建，状态与数据始终由本地应用拥有。后端可用任意语言实现 HTTP 管理协议。先读 [独立本地应用契约](docs/independent-application.md)，再按 [WebBridge 接口](docs/web-bridge.md) 接入。纯透传 `NewRelay` 是无需 FPK 面板时的可选方式，托管 `New` 继续可用。
+
+只有一份本地业务源码的应用可选择 [本地仓库运行](docs/local-repository.md)：仓库所属普通用户执行 Git、构建、校验和运行，FPK 安装目录仅包含桥接及平台文件。`runtime/localrepo` 不复制代码、不调用 sudo、不覆盖未提交修改；应用继续拥有配置、真实进程与数据策略。

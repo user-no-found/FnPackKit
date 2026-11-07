@@ -4,6 +4,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/user-no-found/FnPackKit/runtime/identity"
@@ -13,17 +14,26 @@ var ErrPaused = errors.New("backend manually paused")
 var ErrConfirmation = errors.New("stop or restart requires confirmation")
 var ErrAction = errors.New("unknown backend action")
 
-// Command carries intent only; the caller supplies the authenticated identity separately.
+// Command carries intent and optional one-shot authorization; identity is supplied
+// separately. Password must never be logged, persisted or included in snapshots.
 type Command struct {
-	Action  string `json:"action"`
-	Confirm bool   `json:"confirm,omitempty"`
+	Action   string `json:"action"`
+	Confirm  bool   `json:"confirm,omitempty"`
+	Password string `json:"password,omitempty"`
 }
+
+func (c Command) String() string {
+	return fmt.Sprintf("Command{Action:%q, Confirm:%t, Password:[redacted]}", c.Action, c.Confirm)
+}
+
+func (c Command) GoString() string { return c.String() }
 
 // Snapshot exposes no process addresses, credentials, or other users' state.
 type Snapshot struct {
-	Schema int    `json:"schema"`
-	State  string `json:"state"`
-	Paused bool   `json:"paused"`
+	Schema int          `json:"schema"`
+	State  string       `json:"state"`
+	Paused bool         `json:"paused"`
+	Source *SourceState `json:"source,omitempty"`
 }
 
 // Target owns entitlement, real process checks, graceful shutdown, and startup.
@@ -96,6 +106,13 @@ func (c *Controller) read(ctx context.Context, id identity.Request, s *slot) (Sn
 		return result, nil
 	}
 	running, err := c.target.Running(ctx, id)
+	if source, ok := c.target.(SourceReporter); ok {
+		state, sourceErr := source.SourceStatus(ctx, id)
+		if sourceErr != nil {
+			state.Unavailable = true
+		}
+		result.Source = &state
+	}
 	switch {
 	case err != nil:
 		result.State = "unavailable"
