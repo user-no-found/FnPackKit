@@ -65,7 +65,7 @@ def _render_templates(payload, stage):
         target = path.with_suffix("")
         if target.exists():
             raise ValueError(f"template target already exists: {target}")
-        target.write_text(render(path.read_text(), payload.values))
+        target.write_text(render(path.read_text(encoding="utf-8"), payload.values), encoding="utf-8")
         target.chmod(path.stat().st_mode & 0o777)
         path.unlink()
 

@@ -53,7 +53,7 @@ def _package(ctx, payload, fnpack):
     with ctx.activity("计算 FPK SHA-256"):
         checksum = digest(artifact)
     checksum_file = artifact.with_suffix(".fpk.sha256")
-    checksum_file.write_text(f"{checksum}  {artifact.name}\n")
+    checksum_file.write_text(f"{checksum}  {artifact.name}\n", encoding="utf-8")
     report_file = artifact.with_suffix(".build.json")
     provenance = {"schema": 1, "app_id": ctx.project.data["app_id"],
                   "version": payload.values["VERSION"], "platform": payload.values["PLATFORM"],
@@ -62,6 +62,6 @@ def _package(ctx, payload, fnpack):
                   "build": ctx.metadata, "application": payload.metadata}
     if icon_metadata is not None:
         provenance["icons"] = icon_metadata
-    report_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n")
+    report_file.write_text(json.dumps(provenance, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     ctx.metadata.setdefault("fpk_reports", {})[artifact.name] = str(report_file)
     return [Artifact(path, path.name) for path in (artifact, checksum_file)]

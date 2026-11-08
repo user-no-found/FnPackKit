@@ -293,7 +293,7 @@ HTTP server 必须使用经过信任配置的 `peer.Listener`，并设置 `serve
 
 ## 外部浏览器链接
 
-上游 Web 应用需要在飞牛移动宿主中打开外链时，可以显式接入 `fnpackkit.browser_assets.install_external_links(index, cache, labels)`。`index` 为生产 HTML 入口，`cache` 为项目私有 SDK 下载缓存。方法将共用 `web/external-links.js`、锁定完整性校验的 `@trimjs/web-app` SDK 和启动模块投影到入口旁的 `fnpackkit/`，并在上游模块之前加载；不修改业务源码。源码资源优先取自显式 `FNPACKKIT_PATH`，未设置时使用当前 checkout；wheel 调用应指向完整 checkout 或解压 sdist，空或无效来源明确失败。`labels` 必须提供 `title`、`copied`、`copyFailed`、`copy`、`open`、`close`。调用应用声明 `micro_app=true`，并把 `web/` 和 `src/fnpackkit/browser_assets.py` 纳入生产输入摘要。
+上游 Web 应用需要在飞牛移动宿主中打开外链时，可以显式接入 `fnpackkit.browser_assets.install_external_links(index, cache, labels)`。`index` 为生产 HTML 入口，`cache` 为项目私有 SDK 下载缓存。方法将共用 `web/external-links.js`、锁定完整性校验的 `@trimjs/web-app` SDK 和启动模块投影到入口旁的 `fnpackkit/`，并在上游模块之前加载；不修改业务源码。源码资源优先取自显式 `FNPACKKIT_PATH`，未设置时使用当前 checkout；wheel 调用应指向完整 checkout 或解压 sdist，空或无效来源明确失败。`labels` 必须提供 `title`、`copied`、`copyFailed`、`copy`、`open`、`close`。调用应用声明 `micro_app=true`，并把 `web/` 和 `src/fnpackkit/browser_assets.py` 纳入生产输入摘要。外链回退对话框使用内联样式；启用 `style-src-attr` 严格 CSP 的应用需允许这些声明，否则对话框仍可操作但不带共享样式。
 
 组件保留同源及已有窗口导航。外部 HTTP(S) 新窗口在 Web 中同步打开并断开 opener，在移动宿主中调用 SDK `openURL`；宿主调用有超时。普通外部 `_blank` 链接也经过同一路径，已由业务处理的点击保持原行为。用于授权的 `about:blank` 句柄支持后续 `location.replace` 和取消。打开不可用时显示链接并尝试复制，复制失败保留手动选择；URL 不写入日志或存储。应用不得把成功打开授权网页当作 OAuth 回调成功，供应商的 callback/origin 合约仍由业务应用负责。
 
@@ -333,7 +333,8 @@ account and uses `/usr/sbin/runuser` before running application commands. The sh
 helpers require `/usr/bin/python3`; they do not depend on the installed runtime payload.
 
 The uninstall preflight checks the choice, identity, volume namespace, owners, mounts and
-links before the app stop hook. Retain keeps all undeclared data and configuration, removes
+links before the app stop hook. Traversal is bounded to 1,000,000 entries and 256 path levels;
+exceeding either budget fails before removal. Retain keeps all undeclared data and configuration, removes
 only declared disposable paths plus temporary state, and removes empty home/meta roots.
 Delete removes the application's `TRIM_PKGETC`, `TRIM_PKGVAR`, `TRIM_PKGHOME`, `TRIM_PKGMETA`,
 and `TRIM_PKGTMP` roots. Directory descriptors anchor traversal; roots cannot be symlinks,

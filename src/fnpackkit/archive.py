@@ -10,10 +10,11 @@ MAX_TOTAL = 2 * 1024 ** 3
 
 
 def safe_relative(value):
+    if not isinstance(value, str):
+        raise ValueError(f"unsafe relative path: {value!r}")
     path = PurePosixPath(value)
-    if (not isinstance(value, str) or not value or path.is_absolute()
-            or ".." in path.parts or "\\" in value or "\x00" in value
-            or not path.parts):
+    if (not value or path.is_absolute() or ".." in path.parts
+            or "\\" in value or "\x00" in value or not path.parts):
         raise ValueError(f"unsafe relative path: {value!r}")
     return path.as_posix()
 

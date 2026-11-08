@@ -70,7 +70,7 @@
                 if (closed || attempt !== generation) throw new Error('gateway transport attempt cancelled');
                 inner = transportFactory(address, { protocols: [...protocols, marker, record.protocol] });
             } catch (error) {
-                throw new Error('gateway handshake proof unavailable');
+                throw new Error('gateway handshake proof unavailable', { cause: error });
             } finally {
                 global.clearTimeout(timer);
                 if (controller === active) controller = null;

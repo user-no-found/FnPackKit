@@ -3,109 +3,54 @@ import contextlib
 import grp
 import os
 import pwd
-import re
 import stat
 import sys
+
+try:
+    from .fnpack_uninstall_support import (Budget, FLAGS, Rejected, check_entry, mountpoints,
+                                           nas_owner, open_absolute, policy_data, same_entry, trusted)
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from fnpack_uninstall_support import (Budget, FLAGS, Rejected, check_entry, mountpoints,
+                                          nas_owner, open_absolute, policy_data, same_entry, trusted)
 
 POLICY = None
 DIRECTORIES = {'etc': ('TRIM_PKGETC', '@appconf'), 'var': ('TRIM_PKGVAR', '@appdata'),
                'home': ('TRIM_PKGHOME', '@apphome'), 'meta': ('TRIM_PKGMETA', '@appmeta'),
                'tmp': ('TRIM_PKGTMP', '@apptemp')}
-FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
-class Rejected(Exception):
-    """Diagnostics use stable reasons and never include paths or file contents."""
-
-
-def trusted(info):
-    if info.st_uid != 0 or info.st_mode & 0o022:
-        raise Rejected('untrusted_namespace')
-
-
-def open_absolute(path):
-    if not path.startswith('/') or os.path.normpath(path) != path or path == '/':
-        raise Rejected('invalid_volume')
-    fd = os.open('/', FLAGS)
-    try:
-        for name in path.split('/')[1:]:
-            parent = os.fstat(fd)
-            if parent.st_uid != 0 or (parent.st_mode & 0o022 and
-                                     not parent.st_mode & stat.S_ISVTX):
-                raise Rejected('untrusted_ancestor')
-            child = os.open(name, FLAGS, dir_fd=fd)
-            os.close(fd)
-            fd = child
-        trusted(os.fstat(fd))
-        return fd
-    except BaseException:
-        os.close(fd)
-        raise
-
-
-def mountpoints():
-    result = set()
-    with open('/proc/self/mountinfo', encoding='utf-8') as stream:
-        for line in stream:
-            value = line.split()[4]
-            value = re.sub(r'\\([0-7]{3})', lambda m: chr(int(m[1], 8)), value)
-            result.add(value)
-    return result
-
-
-def check_entry(info, device, uid):
-    if info.st_dev != device:
-        raise Rejected('cross_device_entry')
-    if info.st_uid not in (0, uid):
-        raise Rejected('unexpected_owner')
-    if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
-        raise Rejected('hardlinked_entry')
-    if stat.S_ISCHR(info.st_mode) or stat.S_ISBLK(info.st_mode):
-        raise Rejected('device_entry')
-
-
-def same_entry(parent, name, previous):
-    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-    if (current.st_dev, current.st_ino) != (previous.st_dev, previous.st_ino):
-        raise Rejected('entry_changed')
-
-
-def nas_owner(parent, name, default):
-    info = os.stat(name, dir_fd=parent, follow_symlinks=False)
-    if stat.S_ISDIR(info.st_mode):
-        if (not name.isdecimal() or str(int(name)) != name or
-                not 1000 <= int(name) < 4294967295 or int(name) == 65534 or
-                info.st_uid not in (0, int(name)) or info.st_mode & 0o077):
-            raise Rejected('invalid_nas_user_tree')
-        return int(name)
-    if info.st_uid != 0:
-        raise Rejected('unexpected_control_owner')
-    return default
-
-
-def scan(parent, name, device, uid, nas=False):
+def scan(parent, name, device, uid, nas=False, budget=None, depth=1):
     """Reject every unsafe tree before the first removal; never follows links."""
+    budget = budget or Budget()
+    budget.counted(depth)
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     check_entry(info, device, uid)
     if stat.S_ISDIR(info.st_mode):
         fd = os.open(name, FLAGS, dir_fd=parent)
         try:
             same_entry(parent, name, os.fstat(fd))
-            for child in os.listdir(fd):
-                scan(fd, child, device, nas_owner(fd, child, uid) if nas else uid)
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    scan(fd, entry.name, device, nas_owner(fd, entry.name, uid) if nas else uid,
+                         budget=budget, depth=depth + 1)
         finally:
             os.close(fd)
 
 
-def remove(parent, name, device, uid, nas=False):
+def remove(parent, name, device, uid, nas=False, budget=None, depth=1):
+    budget = budget or Budget()
+    budget.counted(depth)
     info = os.stat(name, dir_fd=parent, follow_symlinks=False)
     check_entry(info, device, uid)
     if stat.S_ISDIR(info.st_mode):
         fd = os.open(name, FLAGS, dir_fd=parent)
         try:
             same_entry(parent, name, os.fstat(fd))
-            for child in os.listdir(fd):
-                remove(fd, child, device, nas_owner(fd, child, uid) if nas else uid)
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    remove(fd, entry.name, device, nas_owner(fd, entry.name, uid) if nas else uid,
+                           budget=budget, depth=depth + 1)
             same_entry(parent, name, info)
             os.rmdir(name, dir_fd=parent)
         finally:
@@ -115,33 +60,42 @@ def remove(parent, name, device, uid, nas=False):
         os.unlink(name, dir_fd=parent)
 
 
-def descendants(fd, parts, device, uid):
+def descendants(fd, parts, device, uid, budget=None, depth=1):
     """Yield open parent descriptors for bounded, declared transient patterns."""
-    names = os.listdir(fd) if parts[0] == '*' else [parts[0]]
-    for name in names:
-        try:
-            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-        except FileNotFoundError:
-            continue
-        check_entry(info, device, uid)
-        if len(parts) == 1:
-            yield fd, name
-        else:
-            if not stat.S_ISDIR(info.st_mode):
-                raise Rejected('unsafe_transient_parent')
-            child = os.open(name, FLAGS, dir_fd=fd)
+    budget = budget or Budget()
+    entries = os.scandir(fd) if parts[0] == '*' else None
+    names = (entry.name for entry in entries) if entries is not None else [parts[0]]
+    try:
+        for name in names:
+            budget.counted(depth)
             try:
-                same_entry(fd, name, os.fstat(child))
-                yield from descendants(child, parts[1:], device, uid)
-            finally:
-                os.close(child)
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            check_entry(info, device, uid)
+            if len(parts) == 1:
+                yield fd, name
+            else:
+                if not stat.S_ISDIR(info.st_mode):
+                    raise Rejected('unsafe_transient_parent')
+                child = os.open(name, FLAGS, dir_fd=fd)
+                try:
+                    same_entry(fd, name, os.fstat(child))
+                    yield from descendants(child, parts[1:], device, uid, budget=budget, depth=depth + 1)
+                finally:
+                    os.close(child)
+    finally:
+        if entries is not None:
+            entries.close()
 
 
 class Cleanup:
     def __init__(self, stack):
-        if os.geteuid() != 0 or POLICY is None:
+        if os.geteuid() != 0:
             raise Rejected('root_lifecycle_required')
-        self.app = POLICY['app_id']
+        policy = policy_data(POLICY)
+        self.policy = policy
+        self.app = policy['app_id']
         if os.environ.get('TRIM_APPNAME') != self.app:
             raise Rejected('application_identity_mismatch')
         uid = os.environ.get('TRIM_UID', '')
@@ -189,47 +143,54 @@ class Cleanup:
             self.roots[label] = (parent, fd)
 
     def targets(self):
+        nas_roots = self.policy.get('nas_user_roots', ())
         if self.action == 'delete':
             for label, (parent, fd) in self.roots.items():
-                yield parent, self.app, label in POLICY.get('nas_user_roots', ())
+                yield parent, self.app, label in nas_roots
             return
         if 'tmp' in self.roots:
-            yield self.roots['tmp'][0], self.app, 'tmp' in POLICY.get('nas_user_roots', ())
-        for value in POLICY['transient']:
+            yield self.roots['tmp'][0], self.app, 'tmp' in nas_roots
+        for value in self.policy['transient']:
             label, *parts = value.split('/')
             if label in self.roots:
-                for parent, name in descendants(self.roots[label][1], parts, self.device, self.uid):
+                for parent, name in descendants(self.roots[label][1], parts, self.device, self.uid,
+                                                budget=Budget()):
                     yield parent, name, False
 
     def preflight(self):
+        budget = Budget()
         for parent, name, nas in self.targets():
-            scan(parent, name, self.device, self.uid, nas)
+            scan(parent, name, self.device, self.uid, nas, budget=budget)
 
     def prepare_nas(self):
         # UID children remain private NAS-owned trees; authority stays root-owned.
+        nas_roots = self.policy['nas_user_roots']
+        budget = Budget()
         for label, (parent, fd) in self.roots.items():
-            if label in POLICY['nas_user_roots']:
-                for name in os.listdir(fd):
-                    nas_owner(fd, name, self.uid)
+            if label in nas_roots:
+                with os.scandir(fd) as entries:
+                    for entry in entries:
+                        nas_owner(fd, entry.name, self.uid)
             else:
-                scan(parent, self.app, self.device, self.uid)
+                scan(parent, self.app, self.device, self.uid, budget=budget)
         for label, (parent, fd) in self.roots.items():
             same_entry(parent, self.app, os.fstat(fd))
             os.fchown(fd, 0, 0)
-            os.fchmod(fd, 0o711 if label in POLICY['nas_user_roots'] else 0o700)
+            os.fchmod(fd, 0o711 if label in nas_roots else 0o700)
 
     def prepare(self):
         """Platform root mode creates root-owned state; hand private state to the app."""
-        if POLICY.get('state_owner') == 'root':
+        if self.policy.get('state_owner') == 'root':
             self.prepare_root()
             return
-        if POLICY.get('nas_user_roots'):
+        if self.policy.get('nas_user_roots'):
             self.prepare_nas()
             return
         selected = [(parent, fd) for parent, fd in self.roots.values()
                     if os.fstat(fd).st_uid == 0]
+        budget = Budget()
         for parent, fd in selected:
-            scan(parent, self.app, self.device, self.uid)
+            scan(parent, self.app, self.device, self.uid, budget=budget)
         parent = os.open('@appcenter', FLAGS, dir_fd=self.volume_fd)
         try:
             trusted(os.fstat(parent))
@@ -254,15 +215,18 @@ class Cleanup:
                     os.close(fd)
         finally:
             os.close(parent)
-        def ownership(parent, name):
+        def ownership(parent, name, budget=None, depth=1):
+            budget = budget or Budget()
+            budget.counted(depth)
             info = os.stat(name, dir_fd=parent, follow_symlinks=False)
             check_entry(info, self.device, self.uid)
             if stat.S_ISDIR(info.st_mode):
                 fd = os.open(name, FLAGS, dir_fd=parent)
                 try:
                     same_entry(parent, name, os.fstat(fd))
-                    for child in os.listdir(fd):
-                        ownership(fd, child)
+                    with os.scandir(fd) as entries:
+                        for entry in entries:
+                            ownership(fd, entry.name, budget=budget, depth=depth + 1)
                     os.fchown(fd, self.uid, self.gid)
                     os.fchmod(fd, 0o700)
                 finally:
@@ -282,7 +246,7 @@ class Cleanup:
                 finally:
                     os.close(fd)
         for parent, fd in selected:
-            ownership(parent, self.app)
+            ownership(parent, self.app, budget=Budget())
         for parent, fd in self.roots.values():
             same_entry(parent, self.app, os.fstat(fd))
             os.fchown(fd, self.uid, self.gid)
@@ -303,10 +267,13 @@ class Cleanup:
                 if any(m == runtime or m.startswith(runtime + '/') for m in self.mounts):
                     raise Rejected('mounted_runtime_entry')
                 entries.append((parent, self.app, False))
+            budget = Budget()
             for directory, name, _ in entries:
-                scan(directory, name, self.device, self.uid)
+                scan(directory, name, self.device, self.uid, budget=budget)
 
-            def ownership(directory, name, private):
+            def ownership(directory, name, private, budget=None, depth=1):
+                budget = budget or Budget()
+                budget.counted(depth)
                 info = os.stat(name, dir_fd=directory, follow_symlinks=False)
                 check_entry(info, self.device, self.uid)
                 if stat.S_ISLNK(info.st_mode):
@@ -325,8 +292,9 @@ class Cleanup:
                         raise Rejected('entry_changed')
                     same_entry(directory, name, current)
                     if stat.S_ISDIR(info.st_mode):
-                        for child in os.listdir(fd):
-                            ownership(fd, child, private)
+                        with os.scandir(fd) as entries:
+                            for entry in entries:
+                                ownership(fd, entry.name, private, budget=budget, depth=depth + 1)
                         os.fchmod(fd, 0o700 if private else 0o755)
                     elif stat.S_ISREG(current.st_mode):
                         # Installer defaults may add group/other access. Keep
@@ -338,19 +306,22 @@ class Cleanup:
                     os.close(fd)
 
             for directory, name, private in entries:
-                ownership(directory, name, private)
+                ownership(directory, name, private, budget=Budget())
         finally:
             os.close(parent)
 
     def cleanup(self):
         self.preflight()
+        budget = Budget()
         for parent, name, nas in self.targets():
-            remove(parent, name, self.device, self.uid, nas)
+            remove(parent, name, self.device, self.uid, nas, budget=budget)
         if self.action == 'retain':
             for label in ('home', 'meta'):
                 if label in self.roots:
                     parent, fd = self.roots[label]
-                    if not os.listdir(fd):
+                    with os.scandir(fd) as entries:
+                        empty = next(entries, None) is None
+                    if empty:
                         same_entry(parent, self.app, os.fstat(fd))
                         os.rmdir(self.app, dir_fd=parent)
 

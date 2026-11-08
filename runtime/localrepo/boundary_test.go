@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,6 +31,27 @@ func TestFailedRemoteBuildLeavesUpdatedWorkspaceStopped(t *testing.T) {
 	}
 	if f.runtime.starts != 1 {
 		t.Fatal("failure restarted the old process")
+	}
+}
+
+func TestRepositoryCommandCannotEscapeWorkspace(t *testing.T) {
+	manager := &Manager{config: Config{Directory: t.TempDir()}}
+	if _, err := manager.run(context.Background(), Command{Program: "../escape"}, false, nil); err == nil {
+		t.Fatal("relative command escaped the configured workspace")
+	}
+}
+
+func TestRepositoryEnvironmentDropsGitTargetOverrides(t *testing.T) {
+	t.Setenv("GIT_DIR", "/tmp/other-repository")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	environment := repositoryEnvironment()
+	for _, value := range environment {
+		if strings.HasPrefix(value, "GIT_DIR=") || strings.HasPrefix(value, "GIT_CONFIG_COUNT=") {
+			t.Fatalf("repository environment retained %s", value)
+		}
+	}
+	if !strings.Contains(strings.Join(environment, "\n"), "GIT_TERMINAL_PROMPT=0") {
+		t.Fatal("repository environment must disable interactive Git prompts")
 	}
 }
 

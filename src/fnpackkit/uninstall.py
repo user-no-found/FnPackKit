@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 from .contracts import UninstallPolicy
+from .lifecycle import FUNCTIONS
 
 ROOTS = {'etc', 'var', 'home', 'meta', 'tmp'}
 
@@ -70,6 +71,36 @@ def validate_uninstall(policy):
         raise ValueError('transient uninstall path overlaps protected data')
 
 
+GUARD_MARKER = '# fnpackkit:uninstall-guard'
+PHASE_HOOKS = (
+    ('uninstall_init', 'preflight', 'uninstall_init'),
+    ('uninstall_callback', 'cleanup', 'uninstall_callback'),
+    ('install_callback', 'prepare', 'install_callback'),
+    ('upgrade_callback', 'prepare', 'upgrade_callback'),
+    ('upgrade_init', 'prepare', 'upgrade_init'),
+    ('config_init', 'prepare', 'config_init'),
+    ('config_callback', 'prepare', 'config_callback'),
+)
+
+
+def _guard(action, label):
+    return (GUARD_MARKER + '\n'
+            'fnp_package=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)\n'
+            'if fnp_cleanup_error=$(/usr/bin/python3 -I "$fnp_package/cmd/hooks/fnpack_uninstall.py" '
+            + action + ' 2>&1); then :; else\n'
+            '    fnp_fail 1 "' + label + ': $fnp_cleanup_error"\nfi\n')
+
+
+def _insert_guard(path, guard, *, main=False):
+    source = path.read_text(encoding='utf-8')
+    if GUARD_MARKER in source or source.count(FUNCTIONS) != 1:
+        raise ValueError(f'generated lifecycle command cannot accept shared uninstall guard: {path.name}')
+    head, separator, tail = source.partition(FUNCTIONS)
+    if main:
+        guard = 'if [ "${1:-}" = start ]; then\n' + guard + 'fi\n'
+    path.write_text(head + separator + guard + tail, encoding='utf-8')
+
+
 def generate_uninstall(stage, policy, app_id, lifecycle):
     """Generate callbacks owned by the toolkit; app stop runs after preflight."""
     if policy is None:
@@ -79,47 +110,40 @@ def generate_uninstall(stage, policy, app_id, lifecycle):
         raise ValueError('uninstall requires a safe app identifier')
     if lifecycle is None or 'uninstall_callback' in lifecycle.hooks:
         raise ValueError('shared uninstall requires lifecycle without a custom post callback')
-    privilege = json.loads((stage / 'config/privilege').read_text())
+    privilege = json.loads((stage / 'config/privilege').read_text(encoding='utf-8'))
     if privilege.get('defaults', {}).get('run-as') != 'root':
         raise ValueError('complete shared uninstall requires root lifecycle privilege')
     required_identity = 'current' if policy.nas_user_roots or policy.state_owner == 'root' else 'package'
     if any(command.run_as != required_identity for command in lifecycle.hooks.values()):
         raise ValueError('shared uninstall hooks do not match their declared state ownership')
     wizard = stage / 'wizard/uninstall'
-    helper = stage / 'cmd/hooks/fnpack_uninstall.py'
-    if wizard.exists() or helper.exists():
+    hooks = stage / 'cmd/hooks'
+    helper = hooks / 'fnpack_uninstall.py'
+    support = hooks / 'fnpack_uninstall_support.py'
+    settings = hooks / 'fnpack_uninstall_policy.json'
+    if wizard.exists() or helper.exists() or support.exists() or settings.exists():
         raise ValueError('shared uninstall would overwrite custom files')
+    for phase, _, _ in PHASE_HOOKS:
+        if not (stage / 'cmd' / phase).is_file():
+            raise ValueError(f'shared uninstall requires generated lifecycle command: {phase}')
+    if not (stage / 'cmd/main').is_file():
+        raise ValueError('shared uninstall requires generated main command')
     wizard.parent.mkdir(exist_ok=True)
     wizard.write_text(json.dumps([{'stepTitle': policy.title, 'items': [{
         'type': 'radio', 'field': 'wizard_data_action', 'label': policy.label,
         'initValue': 'retain', 'options': [
             {'label': policy.retain_label, 'value': 'retain'},
-            {'label': policy.delete_label, 'value': 'delete'}]}]}], ensure_ascii=False) + '\n')
-    helper.parent.mkdir(parents=True, exist_ok=True)
-    data = {'app_id': app_id, 'transient': policy.transient, 'nas_user_roots': policy.nas_user_roots,
-            'state_owner': policy.state_owner}
-    source = Path(__file__).with_name('uninstall_runtime.py').read_text()
-    helper.write_text(source.replace('POLICY = None', 'POLICY = ' + repr(data), 1))
+            {'label': policy.delete_label, 'value': 'delete'}]}]}], ensure_ascii=False) + '\n',
+        encoding='utf-8')
+    hooks.mkdir(parents=True, exist_ok=True)
+    data = {'app_id': app_id, 'transient': list(policy.transient),
+            'nas_user_roots': list(policy.nas_user_roots), 'state_owner': policy.state_owner}
+    settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    helper.write_text(Path(__file__).with_name('uninstall_runtime.py').read_text(encoding='utf-8'),
+                      encoding='utf-8')
+    support.write_text(Path(__file__).with_name('fnpack_uninstall_support.py').read_text(encoding='utf-8'),
+                       encoding='utf-8')
     helper.chmod(0o755)
-    prefix = ('fnp_package=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)\n'
-              'if fnp_cleanup_error=$(/usr/bin/python3 -I "$fnp_package/cmd/hooks/fnpack_uninstall.py" ')
-    phases = [('uninstall_init', 'preflight'), ('uninstall_callback', 'cleanup'),
-              ('install_callback', 'prepare'), ('upgrade_callback', 'prepare'),
-              ('upgrade_init', 'prepare'), ('config_init', 'prepare'),
-              ('config_callback', 'prepare')]
-    for phase, action in phases:
-        file = stage / 'cmd' / phase
-        source = file.read_text()
-        start = source.index(f'fnp_phase={phase}')
-        call = (prefix + action + ' 2>&1); then :; else\n'
-                '    fnp_fail 1 "' + phase + ': $fnp_cleanup_error"\nfi\n')
-        file.write_text(source[:start] + call + source[start:])
-    file = stage / 'cmd/main'
-    source = file.read_text()
-    for action in ('start',):
-        phase = 'main:' + action
-        start = source.index(f'fnp_phase={phase}')
-        call = (prefix + 'prepare 2>&1); then :; else\n'
-                '    fnp_fail 1 "' + phase + ': $fnp_cleanup_error"\nfi\n')
-        source = source[:start] + call + source[start:]
-    file.write_text(source)
+    for phase, action, label in PHASE_HOOKS:
+        _insert_guard(stage / 'cmd' / phase, _guard(action, label))
+    _insert_guard(stage / 'cmd/main', _guard('prepare', 'main:start'), main=True)

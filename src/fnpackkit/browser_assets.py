@@ -32,14 +32,14 @@ def _web_directory():
 def install_external_links(index, cache, labels):
     """Opt an upstream HTML entry into shared external navigation, before its modules."""
     index, cache = Path(index), Path(cache)
-    text = index.read_text()
+    text = index.read_text(encoding="utf-8")
     if text.count('<head>') != 1 or text.count('</head>') != 1:
         raise ValueError('External navigation requires one HTML head')
     if not isinstance(labels, dict) or any(not isinstance(labels.get(key), str) or not labels[key]
                                          for key in ('title', 'copied', 'copyFailed', 'copy', 'open', 'close')):
         raise ValueError('External navigation labels are required')
     web = _web_directory()
-    lock = json.loads((web / 'sdk.lock.json').read_text())
+    lock = json.loads((web / 'sdk.lock.json').read_text(encoding='utf-8'))
     cache.mkdir(parents=True, exist_ok=True)
     archive = cache / ('trimjs-web-app-' + lock['version'] + '.tgz')
     if not archive.exists():
@@ -77,9 +77,9 @@ def install_external_links(index, cache, labels):
         "import { TrimApp } from './sdk.js';\n"
         "import { createExternalLinks } from './external-links.js';\n"
         "const links = createExternalLinks({ sdk: new TrimApp({ debug: false }), labels: "
-        + json.dumps(labels, ensure_ascii=False) + " });\nlinks.install();\n")
+        + json.dumps(labels, ensure_ascii=False) + " });\nlinks.install();\n", encoding='utf-8')
     for path in output.iterdir():
         path.chmod(0o644)
     if MARKER not in text:
         index.write_text(text.replace('<head>', '<head><meta name="referrer" content="no-referrer">'
-                                     + MARKER))
+                                     + MARKER), encoding='utf-8')

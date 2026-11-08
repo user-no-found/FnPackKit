@@ -13,13 +13,15 @@ def check(binary="/usr/bin/docker", runtime=""):
         raise ValueError("Docker executable must be an absolute canonical path")
     if runtime and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", runtime):
         raise ValueError("Invalid Docker runtime name")
-    for arguments, label in ((["compose", "version"], "Docker Compose"),
-                             (["info", "--format", "{{json .Runtimes}}"], "Docker daemon")):
-        result = subprocess.run([binary, *arguments], capture_output=True, timeout=15,
-                                env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin", "LANG": "C"})
-        if result.returncode:
-            raise RuntimeError(f"{label} is unavailable; enable Docker in fnOS")
-    runtimes = json.loads(result.stdout)
+    compose = subprocess.run([binary, "compose", "version"], capture_output=True, timeout=15,
+                             env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin", "LANG": "C"})
+    if compose.returncode:
+        raise RuntimeError("Docker Compose is unavailable; enable Docker in fnOS")
+    daemon = subprocess.run([binary, "info", "--format", "{{json .Runtimes}}"], capture_output=True,
+                            timeout=15, env={"PATH": "/usr/bin:/usr/sbin:/bin:/sbin", "LANG": "C"})
+    if daemon.returncode:
+        raise RuntimeError("Docker daemon is unavailable; enable Docker in fnOS")
+    runtimes = json.loads(daemon.stdout)
     if not isinstance(runtimes, dict):
         raise ValueError("Invalid Docker runtime information")
     if runtime and runtime not in runtimes:

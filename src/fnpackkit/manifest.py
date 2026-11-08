@@ -39,7 +39,7 @@ def read_payload(path):
     path = Path(path)
     if path.stat().st_size > 1024 * 1024:
         raise ValueError("payload manifest exceeds 1 MiB")
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or type(data.get("schema")) is not int or data["schema"] != 1:
         raise ValueError("payload.schema must be 1")
     unknown = set(data) - {"schema", "template", "files", "values", "artifact_name", "metadata", "required", "lifecycle", "uninstall"}

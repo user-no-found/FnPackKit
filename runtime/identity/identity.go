@@ -2,6 +2,7 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -108,14 +109,34 @@ func parsePasswd(row string, uid uint32, name string) (User, error) {
 	return User{UID: uid, GID: uint32(gid), Name: name, Home: fields[5], Shell: fields[6]}, nil
 }
 
+type limitedOutput struct {
+	bytes.Buffer
+	limit    int
+	overflow bool
+}
+
+func (output *limitedOutput) Write(data []byte) (int, error) {
+	length := len(data)
+	if remaining := output.limit - output.Len(); len(data) > remaining {
+		output.overflow = true
+		if remaining > 0 {
+			output.Buffer.Write(data[:remaining])
+		}
+		return length, nil
+	}
+	return output.Buffer.Write(data)
+}
+
 func lookup(program string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
-	data, err := cmd.Output()
-	if len(data) > 16384 {
+	output := &limitedOutput{limit: 16384}
+	cmd.Stdout = output
+	err := cmd.Run()
+	if output.overflow {
 		return "", errors.New("NSS output exceeds limit")
 	}
-	return string(data), err
+	return output.String(), err
 }

@@ -9,6 +9,7 @@ import socket
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fnpackkit.contracts import Lifecycle, LifecycleCommand, UninstallPolicy
 from fnpackkit.lifecycle import generate_lifecycle
@@ -38,6 +39,36 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(parse_uninstall(data), policy())
         with self.assertRaises(ValueError):
             parse_uninstall({**data, 'delete_external': True})
+
+    def test_generated_policy_is_json_and_guards_are_explicit(self):
+        with tempfile.TemporaryDirectory(prefix='fnpack-policy-') as temporary:
+            stage = Path(temporary) / 'stage'
+            (stage / 'config').mkdir(parents=True)
+            (stage / 'config/privilege').write_text('{"defaults":{"run-as":"root"}}', encoding='utf-8')
+            lifecycle = Lifecycle({})
+            generate_lifecycle(stage, lifecycle)
+            generate_uninstall(stage, policy(), 'example', lifecycle)
+            settings = stage / 'cmd/hooks/fnpack_uninstall_policy.json'
+            self.assertEqual(json.loads(settings.read_text(encoding='utf-8')), {
+                'app_id': 'example', 'transient': list(policy().transient),
+                'nas_user_roots': [], 'state_owner': 'package'})
+            helper = stage / 'cmd/hooks/fnpack_uninstall.py'
+            self.assertNotIn('POLICY = {', helper.read_text(encoding='utf-8'))
+            for name in ('uninstall_init', 'uninstall_callback', 'install_callback', 'main'):
+                text = (stage / 'cmd' / name).read_text(encoding='utf-8')
+                self.assertEqual(text.count('# fnpackkit:uninstall-guard'), 1, name)
+            main = (stage / 'cmd/main').read_text(encoding='utf-8')
+            self.assertIn('if [ "${1:-}" = start ]', main)
+            with self.assertRaisesRegex(ValueError, 'overwrite'):
+                generate_uninstall(stage, policy(), 'example', lifecycle)
+
+    def test_budget_rejects_depth_and_entry_overflow(self):
+        from fnpackkit import fnpack_uninstall_support as support
+        with self.assertRaises(support.Rejected):
+            support.Budget().counted(support.MAX_DEPTH + 1)
+        with patch.object(support, 'MAX_ENTRIES', 0):
+            with self.assertRaises(support.Rejected):
+                support.Budget().counted(1)
 
 
 @unittest.skipUnless(os.geteuid() == 0 and os.environ.get('FNP_TEST_USERNAME'),
@@ -190,6 +221,16 @@ printf '%s:%s:%s:%s:%s\\n' "$1" "$(id -u)" "$TRIM_RUN_UID" "$(id -g)" "$TRIM_RUN
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((self.roots['var'] / 'cache/compiled').is_file())
         self.assertFalse((self.roots['var'] / 'events').exists())
+
+    def test_tree_depth_budget_rejects_before_removal(self):
+        current = self.roots['var']
+        for index in range(260):
+            current = current / ('d%03d' % index)
+        current.mkdir(parents=True)
+        (current / 'keep').write_text('synthetic deep state', encoding='utf-8')
+        result = self.run_phase('uninstall_init')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((current / 'keep').is_file())
 
     def test_mount_descendant_is_rejected_including_same_device_bind(self):
         file = self.stage / 'cmd/hooks/fnpack_uninstall.py'

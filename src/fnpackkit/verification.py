@@ -23,7 +23,7 @@ def verify_package(path, stage, expected):
             if mirrored in expected and expected[mirrored] != expected[name]:
                 raise ValueError(f"conflicting package and app config: {name}")
             expected[mirrored] = expected[name]
-    expected_manifest = manifest_fields((stage / "manifest").read_text())
+    expected_manifest = manifest_fields((stage / "manifest").read_text(encoding="utf-8"))
     with tarfile.open(path, "r:*") as archive:
         members = {safe_relative(item.name): item for item in archive.getmembers()}
         if members["manifest"].size > 65536:

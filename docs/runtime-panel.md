@@ -20,6 +20,8 @@
 
 代理请求设置 `Accept-Encoding: identity`，在 HTML 响应中调用 `runtimepanel.Inject(response, prefix)`。组件只改写具有明确完整 head 的 200 HTML 文档，定位时跳过脚本、样式、注释、属性和模板中的标签文本。令牌字符串、空响应、HTML 片段和边界不明确的页面原样保留正文及 Cookie/缓存元数据，不改 API 或 WebSocket；保留原页面 CSP，并为严格 nonce 策略沿用原有脚本 nonce。压缩 HTML、过大的入口页面和冲突 nonce 策略会明确失败，不能通过删除 CSP 解决。JS/CSS 随共享 Go 模块嵌入，无运行时 CDN。
 
+带 CSP 的页面只注入 module loader；无 CSP 响应额外加入 classic loader 以兼容不执行注入 module script 的 fnOS 宿主壳。若目标宿主两者都不执行，需在真实壳中确认入口策略，不能通过删除 CSP 解决。
+
 ## HTTP 协议
 
 路径以应用前缀为基准：

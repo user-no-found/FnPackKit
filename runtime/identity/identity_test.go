@@ -23,6 +23,16 @@ func TestPasswdBoundary(t *testing.T) {
 	}
 }
 
+func TestLimitedOutputRejectsOverflow(t *testing.T) {
+	output := &limitedOutput{limit: 4}
+	if written, err := output.Write([]byte("abcdef")); written != 6 || err != nil {
+		t.Fatalf("unexpected write result: %d, %v", written, err)
+	}
+	if !output.overflow || output.String() != "abcd" {
+		t.Fatalf("overflow was not bounded: %q", output.String())
+	}
+}
+
 // The native current account is resolved through both NSS directions without changing it.
 func TestCurrentNSSBoundary(t *testing.T) {
 	uid := uint32(os.Getuid())

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,11 +45,16 @@ func (m *Manager) run(ctx context.Context, command Command, logOutput bool, sour
 	}
 	program := command.Program
 	if !filepath.IsAbs(program) && filepath.Dir(program) != "." {
-		program = filepath.Join(m.config.Directory, program)
+		candidate := filepath.Join(m.config.Directory, program)
+		relative, err := filepath.Rel(m.config.Directory, candidate)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			return nil, errors.New("repository command must stay inside the workspace")
+		}
+		program = candidate
 	}
 	cmd := exec.CommandContext(ctx, program, command.Args...)
 	cmd.Dir = m.config.Directory
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = repositoryEnvironment()
 	if source != nil {
 		encoded, err := json.Marshal(source)
 		if err != nil {
@@ -90,5 +96,24 @@ func (m *Manager) run(ctx context.Context, command Command, logOutput bool, sour
 }
 
 func (m *Manager) git(ctx context.Context, args ...string) ([]byte, error) {
-	return m.run(ctx, Command{m.config.Git, append([]string{"--no-optional-locks", "-c", "core.fsmonitor=false"}, args...)}, false, nil)
+	arguments := append([]string{"--no-optional-locks", "-c", "core.fsmonitor=false",
+		"-c", "core.hooksPath=" + os.DevNull}, args...)
+	return m.run(ctx, Command{m.config.Git, arguments}, false, nil)
+}
+
+func repositoryEnvironment() []string {
+	blocked := map[string]bool{
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_INDEX_FILE": true,
+		"GIT_OBJECT_DIRECTORY": true, "GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
+		"GIT_COMMON_DIR": true, "GIT_NAMESPACE": true, "GIT_CONFIG": true,
+		"GIT_CONFIG_COUNT": true, "GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true,
+	}
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, value := range os.Environ() {
+		name, _, _ := strings.Cut(value, "=")
+		if !blocked[name] {
+			environment = append(environment, value)
+		}
+	}
+	return append(environment, "GIT_TERMINAL_PROMPT=0")
 }

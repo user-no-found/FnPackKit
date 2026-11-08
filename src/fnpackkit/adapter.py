@@ -1,4 +1,5 @@
 """Load only explicitly selected, trusted application build adapters."""
+import hashlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -13,20 +14,27 @@ def load_plan(project, declaration):
     source = project.root / safe_relative(filename)
     if source.is_symlink() or not source.is_file() or not source.resolve().is_relative_to(project.root):
         raise ValueError("adapter must be a regular Python file inside the selected project")
-    name = "_fnpackkit_application_adapter"
+    name = "_fnpackkit_application_adapter_" + hashlib.sha256(str(source).encode()).hexdigest()[:16]
     spec = importlib.util.spec_from_file_location(name, source)
     if spec is None or spec.loader is None:
         raise ValueError("cannot load application adapter")
     module = importlib.util.module_from_spec(spec)
     previous = sys.modules.get(name)
     sys.modules[name] = module
-    sys.path.insert(0, str(source.parent))
+    inserted = str(source.parent)
+    sys.path.insert(0, inserted)
     try:
         spec.loader.exec_module(module)
         entry = getattr(module, function)
         result = entry(project)
     finally:
-        sys.path.remove(str(source.parent))
+        if sys.path and sys.path[0] == inserted:
+            sys.path.pop(0)
+        else:
+            try:
+                sys.path.remove(inserted)
+            except ValueError:
+                pass
         if previous is None:
             sys.modules.pop(name, None)
         else:

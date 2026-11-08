@@ -127,19 +127,19 @@ def generate_lifecycle(stage, profile):
         if helper.exists():
             raise ValueError('generated lifecycle would overwrite identity helper')
         ensure_directory(stage, helper.parent)
-        helper.write_text(Path(__file__).with_name('lifecycle_identity.py').read_text())
+        helper.write_text(Path(__file__).with_name('lifecycle_identity.py').read_text(encoding='utf-8'), encoding='utf-8')
         helper.chmod(0o755)
     header = '#!/bin/sh\nset -eu\n' + FUNCTIONS
     for phase in PHASES:
         target = command_dir / phase
-        target.write_text(header + _body(phase, profile.hooks.get(phase)))
+        target.write_text(header + _body(phase, profile.hooks.get(phase)), encoding='utf-8')
         target.chmod(0o755)
     body = 'case "${1:-}" in\n'
     for action in ACTIONS:
         phase = 'main:' + action
         body += f'{action})\n' + _body(phase, profile.hooks.get(phase)) + ';;\n'
     body += '*) fnp_fail 1 "main: expected start, stop or status" ;;\nesac\n'
-    (command_dir / 'main').write_text(header + body)
+    (command_dir / 'main').write_text(header + body, encoding='utf-8')
     (command_dir / 'main').chmod(0o755)
-    (command_dir / 'fnpackkit.sh').write_text(FUNCTIONS)
+    (command_dir / 'fnpackkit.sh').write_text(FUNCTIONS, encoding='utf-8')
     (command_dir / 'fnpackkit.sh').chmod(0o644)
