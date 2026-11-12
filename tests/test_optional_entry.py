@@ -49,11 +49,7 @@ class OptionalEntryTests(OptionalFixture, unittest.TestCase):
         starts = [event for event in self.events if event["type"] == "step_start"]
         self.assertEqual(starts[0]["name"], "produce")
         self.assertNotIn("选择并冻结可选构建包", [event["name"] for event in starts])
-        index = next(index for index, event in enumerate(self.events) if event["type"] == "build_start")
-        self.assertIn("校验可选功能源",
-                      [event.get("name") for event in self.events[:index] if event["type"] == "activity_start"])
-        self.assertTrue(all(event["type"] in {"activity_start", "activity_end", "command", "command_end",
-                                              "output", "notice"} for event in self.events[:index]))
+        self.assertEqual(self.events[0]["type"], "build_start")
 
     def test_no_declaration_uses_original_pipeline_without_git_scan(self):
         result, observed = self.invoke(enabled=False)

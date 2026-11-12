@@ -240,3 +240,11 @@ if __name__ == "__main__":
     def test_no_optional_sources_open_no_activity(self):
         self.choose(features=[])
         self.assertFalse([event for event in self.events if event.get("type") == "activity_start"])
+
+    def test_selection_validation_does_not_emit_runner_noise(self):
+        self.package("cyberstrike")
+        record = self.choose(["cyberstrike"])
+        before = [event for event in self.events if event.get("type") == "command"]
+        self.assertEqual(selection(self.ctx), record)
+        after = [event for event in self.events if event.get("type") == "command"]
+        self.assertEqual(after, before)

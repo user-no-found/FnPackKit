@@ -19,7 +19,7 @@ def selection(ctx):
         if enabled(ctx.project.data.get("fnpackkit", {})):
             raise ValueError("optional selection has not been prepared")
         return None
-    validate_selection(record, runner=ctx.runner)
+    validate_selection(record)
     return copy.deepcopy(record)
 
 
@@ -82,8 +82,7 @@ def selection_prepare(project, *, features=None, no_features=False):
         return None
 
     def select(ctx):
-        project_name, candidates = scan(
-            ctx.project, activity=lambda name: ctx.activity("校验可选功能源", target=name))
+        project_name, candidates = scan(ctx.project)
         ids = {item["manifest"]["id"] for item in candidates}
         chosen = requested
         if chosen is None:

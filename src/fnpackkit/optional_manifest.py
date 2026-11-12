@@ -1,5 +1,4 @@
 """Statically discover and validate one-level declarative optional packages."""
-import contextlib
 import json
 import re
 
@@ -68,7 +67,7 @@ def parse(content, *, project, directory):
     return data
 
 
-def scan(project, *, runner=None, activity=None):
+def scan(project, *, runner=None):
     """Read only direct regular repositories with fpk-option.json; never import code."""
     root = project.root.absolute()
     optional = root / "optional"
@@ -92,30 +91,28 @@ def scan(project, *, runner=None, activity=None):
         manifest = path / "fpk-option.json"
         if not manifest.exists() and not manifest.is_symlink():
             continue
-        span = activity(path.name) if activity is not None else contextlib.nullcontext()
-        with span:
-            if project_name is None:
-                project_name = repository_name(identity(root, runner=runner, allow_uncommitted=True)["origin"])
-            content = read_regular(path, "fpk-option.json", limit=1024 * 1024)
-            data = parse(content, project=project_name, directory=path.name)
-            if data["id"] in seen:
-                raise ValueError(f"duplicate optional feature id: {data['id']}")
-            seen.add(data["id"])
-            expected = project_name + "Optional-" + data["id"]
-            if path.name != expected:
-                raise ValueError(f"optional directory/id mismatch: expected {expected}, got {path.name}")
-            info = identity(path, runner=runner, allow_uncommitted=True)
-            if repository_name(info["origin"]) != path.name:
-                raise ValueError(f"optional origin basename must equal directory {path.name}")
-            contents = {}
-            total += len(content)
-            for name in dict.fromkeys((*data["patches"], *(entry["source"] for entry in data["files"]), *data.get("tests", []))):
-                contents[name] = read_regular(path, name)
-                total += len(contents[name])
-                if total > MAX_TOTAL:
-                    raise ValueError("optional declared input budget exceeds 128 MiB")
-            candidates.append({"path": str(path), "manifest": data, "manifest_content": content,
-                               "contents": contents, **info})
+        if project_name is None:
+            project_name = repository_name(identity(root, runner=runner, allow_uncommitted=True)["origin"])
+        content = read_regular(path, "fpk-option.json", limit=1024 * 1024)
+        data = parse(content, project=project_name, directory=path.name)
+        if data["id"] in seen:
+            raise ValueError(f"duplicate optional feature id: {data['id']}")
+        seen.add(data["id"])
+        expected = project_name + "Optional-" + data["id"]
+        if path.name != expected:
+            raise ValueError(f"optional directory/id mismatch: expected {expected}, got {path.name}")
+        info = identity(path, runner=runner, allow_uncommitted=True)
+        if repository_name(info["origin"]) != path.name:
+            raise ValueError(f"optional origin basename must equal directory {path.name}")
+        contents = {}
+        total += len(content)
+        for name in dict.fromkeys((*data["patches"], *(entry["source"] for entry in data["files"]), *data.get("tests", []))):
+            contents[name] = read_regular(path, name)
+            total += len(contents[name])
+            if total > MAX_TOTAL:
+                raise ValueError("optional declared input budget exceeds 128 MiB")
+        candidates.append({"path": str(path), "manifest": data, "manifest_content": content,
+                           "contents": contents, **info})
     return project_name, candidates
 
 
