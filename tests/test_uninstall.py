@@ -228,7 +228,7 @@ printf '%s:%s:%s:%s:%s\\n' "$1" "$(id -u)" "$TRIM_RUN_UID" "$(id -g)" "$TRIM_RUN
             current = current / ('d%03d' % index)
         current.mkdir(parents=True)
         (current / 'keep').write_text('synthetic deep state', encoding='utf-8')
-        result = self.run_phase('uninstall_init')
+        result = self.run_phase('uninstall_init', wizard_data_action='delete')
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue((current / 'keep').is_file())
 

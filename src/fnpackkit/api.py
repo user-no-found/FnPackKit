@@ -52,7 +52,7 @@ def _configuration(project, steps, payload, verify, reports, fnpack, metadata):
 
     def check_optional(ctx):
         if "optional_packages" in config:
-            validate_selection(ctx.metadata["optional_packages"], runner=ctx.runner)
+            validate_selection(ctx.metadata["optional_packages"])
 
     def package_payloads(ctx):
         check_optional(ctx)

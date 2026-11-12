@@ -50,6 +50,7 @@ class OptionalEntryTests(OptionalFixture, unittest.TestCase):
         self.assertEqual(starts[0]["name"], "produce")
         self.assertNotIn("选择并冻结可选构建包", [event["name"] for event in starts])
         self.assertEqual(self.events[0]["type"], "build_start")
+        self.assertEqual([event for event in self.events if event["type"] == "command"], [])
 
     def test_no_declaration_uses_original_pipeline_without_git_scan(self):
         result, observed = self.invoke(enabled=False)
