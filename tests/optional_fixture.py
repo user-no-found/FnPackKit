@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from buildflow.activity import Activities
 from buildflow.contracts import Context, Project
 from buildflow.runner import Runner
 from fnpackkit.optional_packages import selection_prepare
@@ -26,8 +27,10 @@ class OptionalFixture:
                                    "optional_packages": {"schema": 1}}}
         self.project = Project(self.main / "project.json", self.main, self.data, self.data["buildflow"])
         self.events = []
+        activities = Activities(self.events.append)
         self.ctx = Context(self.project, self.work, self.root / "output",
-                           Runner(self.work / "commands.log", self.events.append))
+                           Runner(self.work / "commands.log", self.events.append, activities=activities),
+                           activities=activities)
 
     @staticmethod
     def git(path, *args):

@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -210,3 +211,32 @@ class OptionalSelectionTests(OptionalFixture, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_each_optional_source_validation_reports_a_named_activity(self):
+        self.package("cyberstrike")
+        self.package("clean-session")
+        self.choose(features=[])
+        starts = [event for event in self.events if event.get("type") == "activity_start"]
+        self.assertEqual({event["target"] for event in starts},
+                         {"FnDSHOptional-cyberstrike", "FnDSHOptional-clean-session"})
+        self.assertTrue(all(event["name"] == "校验可选功能源" for event in starts))
+        ends = [event for event in self.events if event.get("type") == "activity_end"]
+        self.assertEqual(len(ends), 2)
+        self.assertTrue(all(event["outcome"] == "completed" for event in ends))
+        git = [event for event in self.events
+               if event.get("type") == "command" and event.get("label") == "git"]
+        self.assertTrue(git)
+        self.assertTrue(all(event["activity_id"] for event in git))
+
+    def test_invalid_optional_source_marks_activity_interrupted(self):
+        path = self.package("broken")
+        shutil.rmtree(path / ".git")
+        with self.assertRaisesRegex(ValueError, "independent Git directory"):
+            self.choose(features=[])
+        ends = [event for event in self.events if event.get("type") == "activity_end"]
+        self.assertEqual([event["target"] for event in ends], ["FnDSHOptional-broken"])
+        self.assertEqual(ends[0]["outcome"], "interrupted")
+
+    def test_no_optional_sources_open_no_activity(self):
+        self.choose(features=[])
+        self.assertFalse([event for event in self.events if event.get("type") == "activity_start"])

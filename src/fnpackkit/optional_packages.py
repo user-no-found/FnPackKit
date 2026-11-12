@@ -82,7 +82,8 @@ def selection_prepare(project, *, features=None, no_features=False):
         return None
 
     def select(ctx):
-        project_name, candidates = scan(ctx.project)
+        project_name, candidates = scan(
+            ctx.project, activity=lambda name: ctx.activity("校验可选功能源", target=name))
         ids = {item["manifest"]["id"] for item in candidates}
         chosen = requested
         if chosen is None:
