@@ -35,6 +35,20 @@ class OptionalSourceTests(OptionalFixture, unittest.TestCase):
         self.assertEqual(result["paths"], ["existing.txt", "nested/added.txt"])
         self.assertEqual({name: (package / name).read_bytes() for name in original}, original)
 
+    def test_selection_revalidation_is_grouped_as_one_named_activity(self):
+        for feature in ("alpha", "beta", "gamma"):
+            package = self.package(feature, files=[
+                {"source": "addition", "destination": f"{feature}.txt", "mode": 0o644}])
+            (package / "addition").write_text(feature)
+        self.choose(["alpha", "beta", "gamma"])
+        apply_source(self.ctx, self.target())
+        starts = [event for event in self.events if event.get("type") == "activity_start"]
+        activity = next(event for event in starts if event["name"] == "复核可选功能源")
+        first_git = [event for event in self.events
+                     if event.get("type") == "command" and event.get("label") == "git"][:9]
+        self.assertEqual(len(first_git), 9)
+        self.assertTrue(all(event["activity_id"] == activity["id"] for event in first_git))
+
     def test_bad_patch_does_not_apply_earlier_changes_or_create_dirs(self):
         _, target = self.prepared(bad_patch=True)
         before = self.git(target, "status", "--porcelain=v1")

@@ -71,7 +71,8 @@ def apply_source(ctx, target, *, source_origin=None, source_revision=None):
     record = ctx.metadata.get("optional_packages")
     if record is None:
         raise ValueError("optional selection step has not run")
-    validate_selection(record, runner=ctx.runner)
+    with ctx.activity("复核可选功能源"):
+        validate_selection(record, runner=ctx.runner)
     target = Path(target).absolute()
     work = ctx.work.absolute()
     if target == work or not target.is_relative_to(work):
