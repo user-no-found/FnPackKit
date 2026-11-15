@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { openControls } from './browser_panel_support.mjs';
+import { expireCredentialsUI, verifyIdleAuthorization, verifyDraftFocus } from './browser_panel_idle_credentials.mjs';
 
 const passwordLabel = '当前 NAS 账号的 sudo 密码';
 const searchText = 'sun';
@@ -43,7 +45,7 @@ async function challenge(page, action = 'start') {
 }
 
 async function open(page) {
-  await button(page, '后端控制').click();
+  await openControls(page);
   await button(page, '关闭控制面板').waitFor({ state: 'visible' });
   await idle(page);
 }
@@ -158,7 +160,7 @@ async function lateChallenges(page, fixture) {
     await button(page, '关闭控制面板').click();
     if (reopen) {
       // Opening during a real in-flight request must not make that old intent current.
-      await button(page, '后端控制').click();
+      await openControls(page);
       await button(page, '关闭控制面板').focus();
     } else await page.getByLabel('普通搜索', { exact: true }).focus();
     const focusBefore = await focusedLabel(page);
@@ -248,19 +250,21 @@ async function authorizeOnce(page, fixture, phone) {
 }
 
 async function acceptedAfterClose(context, fixture, errors) {
-  for (const reopen of [false, true]) {
+  for (const exit of ['close', 'idle']) for (const reopen of [false, true]) {
     const page = await initial(context, fixture, errors);
     try {
       await open(page);
+      if (exit === 'idle') await page.clock.install();
       const handle = await challenge(page);
       await password(page).fill(fixture.secret);
       const held = fixture.deferNext('success');
       await password(page).press('Enter');
       await held.received;
       await removed(handle);
-      await button(page, '关闭控制面板').click();
+      if (exit === 'idle') await expireCredentialsUI(page);
+      else await button(page, '关闭控制面板').click();
       if (reopen) {
-        await button(page, '后端控制').click();
+        await openControls(page);
         await button(page, '关闭控制面板').focus();
       } else await page.getByLabel('普通搜索', { exact: true }).focus();
       const focusBefore = await focusedLabel(page);
@@ -280,10 +284,14 @@ export async function verifyPanelCredentials(context, fixture, phone, errors) {
   const page = await initial(context, fixture, errors);
   try {
     await ordinaryControls(page, fixture);
+    await verifyDraftFocus(page, { drafts, focusedLabel, phone });
     await teardownPaths(page, fixture);
     await retryAndTerminalFailure(page, fixture);
     await lateChallenges(page, fixture);
     await lateFrame(page, fixture);
+    await verifyIdleAuthorization(page, fixture, {
+      challenge, password, removed, noPassword, drafts, open, idle, focusedLabel,
+    });
     await authorizeOnce(page, fixture, phone);
   } finally { await page.close(); }
   await acceptedAfterClose(context, fixture, errors);
@@ -294,5 +302,8 @@ export async function verifyPanelCredentials(context, fixture, phone, errors) {
     lateFrame: true, lateSuccessCloseReopen: true, ordinaryDraftsPreserved: true,
     compactKeyboard: phone, authorizedUpdateOnce: true, statusReadOnly: true,
     emptyAuthorizationReadOnly: true, noCredentialStorage: true,
+    idlePasswordCleared: true, typingRenewsIdle: true, idleLateChallengeAndFrame: true,
+    idleAcceptedNotCancelledOrReplayed: true, genericEditableFocusPreserved: true,
+    editorEscapePairOwned: true,
   };
 }

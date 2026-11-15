@@ -104,7 +104,7 @@ func (h Handler) Handle(w http.ResponseWriter, r *http.Request, user identity.Re
 		}
 		return true
 	}
-	allowed := map[string]string{"bootstrap.js": "text/javascript", "panel.js": "text/javascript", "scope.js": "text/javascript", "source.js": "text/javascript", "extensions.js": "text/javascript", "drag.js": "text/javascript", "presentation.js": "text/javascript", "viewport.js": "text/javascript", "panel.css": "text/css"}
+	allowed := map[string]string{"bootstrap.js": "text/javascript", "panel.js": "text/javascript", "scope.js": "text/javascript", "source.js": "text/javascript", "extensions.js": "text/javascript", "drag.js": "text/javascript", "state.js": "text/javascript", "geometry.js": "text/javascript", "presentation.js": "text/javascript", "viewport.js": "text/javascript", "panel.css": "text/css"}
 	if kind, ok := allowed[suffix]; ok {
 		data, err := assets.ReadFile("web/" + suffix)
 		if err != nil {

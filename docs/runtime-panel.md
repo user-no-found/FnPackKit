@@ -31,7 +31,7 @@
 | `/_runtime/control` GET | 不唤醒后端的状态查询 |
 | `/_runtime/control` POST | `{action, confirm, password?}` 意图，接受 start、stop、restart 及服务端明确声明的控制命令 |
 | `/_runtime/manifest` GET | 当前应用名称、前缀和 UI 扩展声明 |
-| `/_runtime/{bootstrap.js,panel.js,drag.js,presentation.js,viewport.js,panel.css}` GET/HEAD | 已认证的共享控制资源 |
+| `/_runtime/{bootstrap.js,panel.js,state.js,geometry.js,drag.js,presentation.js,viewport.js,scope.js,source.js,extensions.js,panel.css}` GET/HEAD | 显式白名单内、Go 嵌入的已认证共享控制资源 |
 
 POST 使用 `Content-Type: application/json`、`X-FnPackKit-Control: 1`，并通过应用原有的 Origin 策略。stop/restart 要求 `confirm: true`。控制体不接受 UID、用户名、进程地址、持久凭据或 shell 命令；身份作为服务端已验证参数传入。支持一次性授权的控制端可接收仅用于本次操作的 `password`，不支持授权的旧 `ExecuteCommand` 回调会拒绝该字段。
 
@@ -49,11 +49,22 @@ POST 使用 `Content-Type: application/json`、`X-FnPackKit-Control: 1`，并通
 
 ## 交互与扩展
 
-悬浮按钮可拖动，靠近四个边缘时吸附并半隐藏。悬停、键盘聚焦或打开面板时完全显示；位置是当前浏览器按应用前缀保存的界面偏好。调整视口会将按钮和面板限制在可见区域，支持减少动画偏好。
+手机与 Web 使用同一个按钮旁非模态小浮窗，不使用底部 sheet、遮罩或紧凑视口专用交互。共享按钮为 44px，鼠标、触控及笔均可拖动；松手吸附最近的四个边缘之一，不拖动业务 DOM。指针取消、失去 capture 及额外触点不会遗留拖动或误触展开；一次拖动也不会吞掉后续真正点击。位置按应用前缀作为当前浏览器的本地偏好保存，不属于后端状态。
 
-窄屏或紧凑触控视口使用完整可见的控制按钮及底部面板，保留桌面的拖动位置。布局以实际可见视口、软键盘占用及可用宽高为准，支持 `visualViewport` 和 VirtualKeyboard 几何变化；这不是 fnOS 宿主身份判断。应用需要 JS SDK 时仍独立声明平台能力，不能用屏幕宽度代替授权或宿主检测。
+交互状态与计时：
 
-应用已有手机工具栏时，在 `Handler.Layout` 声明 `runtimepanel.Layout{Launcher: "[data-app-controls]", Avoid: "#app-keybar"}`。Launcher 是专门交给共享面板的控制入口：应用将它初始设为 disabled，点击时向 window 派发 `fnpackkit:open-controls`；共享面板初始化后启用它，检测到可见入口后隐藏重复悬浮按钮。Avoid 指向底部工具栏，面板会避让其实测区域；目标动态挂载或改变高度后重新定位。入口不存在或不可见时自动保留独立控制按钮，后端停止后的页面也能重新启动。选择器只引用应用自己的 DOM，共享库不识别任何特定终端或业务界面。
+- `half`：按钮向最近边缘半隐藏。首次点击只露出完整球并进入 `revealed`，该次不同时展开；3 秒无后续操作恢复 `half`，再次点击才进入 `open`。
+- `revealed`：完整按钮。普通页面初始显示和拖动属于一般活动，5 秒无操作转为 `half`；从 `half` 点击唤出的窗口为 3 秒。
+- `open`：按钮旁展开浮窗，真正用户操作（包括密码输入）续 5 秒；无操作到期关闭并转为 `half`。停机/恢复页初始展开也遵守 5 秒。请求处理中仍按时收起，但服务端已接受的操作继续执行。
+- 叉号、Escape、真实用户点击外部立即关闭并半隐藏；扩展转发到业务按钮的程序化 `click()` 不是外部用户操作，`KeepOpen` 继续保持展开，普通扩展仍由自身关闭回调收起。关闭沿用授权 owner 失效和控件清理，迟到响应或聚焦回调不能复活授权输入，不自动取消、重放或新发后端命令。
+
+计时依据绝对截止时间；状态查询、DOM 渲染、布局回调、视口变化和前台恢复都不续期。前台返回会检查已过期的交互。静止悬停或保留焦点不会永久阻止半隐藏；正常键盘 Tab/Enter/Space 导航保留，关闭后程序聚焦不唤出按钮。已有真实 DOM 编辑输入（含 contenteditable）聚焦时，鼠标/触控点击共享按钮或声明的工具栏入口不会无谓夺走编辑焦点；键盘导航可明确转焦，一次性密码挑战仍明确聚焦授权输入。
+
+布局依据安全区、实际可见视口、软键盘与应用声明的避让区域限制按钮和浮窗；半隐藏的外半同时裁切绘制与命中区域，不覆盖内部工具栏或偏移视口边界。支持 `visualViewport` 和 VirtualKeyboard 几何变化及减少动画偏好；这不是 fnOS 宿主身份判断。应用需要 JS SDK 时仍独立声明平台能力，不能用屏幕宽度代替授权或宿主检测。测试观察可使用 host/toggle 的 `data-ui-state`（`half`/`revealed`/`open`）及 toggle 的 `data-dragging`/`data-edge`；toggle 的 `data-state` 仍是后端 running/paused 等枚举，不与 UI 状态混用。
+
+应用已有手机工具栏时，在 `Handler.Layout` 声明 `runtimepanel.Layout{Launcher: "[data-app-controls]", Avoid: "#app-keybar"}`。Launcher 是专门交给共享面板的控制入口：应用将它初始设为 disabled，点击时向 window 派发 `fnpackkit:open-controls`；共享面板初始化后启用它，检测到可见入口后隐藏重复悬浮按钮。该入口打开同一个按钮旁小浮窗，不半隐藏应用自己的工具栏。Avoid 指向底部工具栏，按钮及面板会避让其实测区域；目标动态挂载或改变高度后重新定位。入口不存在或不可见时自动恢复独立控制按钮，不产生重复入口，后端停止后的页面也能重新启动。选择器只引用应用自己的 DOM，共享库不识别任何特定终端或业务界面。
+
+通用交互唯一归属于共享 `runtime/runtimepanel`。消费 FPK 不得拷贝、私有重实现或通过字符串替换（如 `strings.Replace`）覆盖共享 JS/CSS，不在共享库添加应用名、UA、版本特判或私有共享操作。业务权限、实际进程和数据仍由应用负责；工具栏、扩展按钮与命令通过 `Layout`／`Action`／`Command` 声明，不能用私有资源副本改变统一交互。
 
 `runtimepanel.Action{ID, Label, Selector}` 注册当前文档中既有按钮的入口。共享面板隐藏重复入口，点击扩展时按选择器查找当前按钮；SPA 替换节点后继续使用新按钮，目标暂时移除时入口停用，重新挂载后恢复。业务权限仍由该按钮对应的应用后端检查。FnTuiOS 用该接口保留 sip 的终端显示设置。扩展不接受来自浏览器的任意执行命令。
 

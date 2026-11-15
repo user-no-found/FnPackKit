@@ -1,20 +1,15 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { verifyPanelCredentials } from './browser_panel_credentials.mjs';
+import { servePanelAsset } from './browser_panel_fixture.mjs';
 
 const runtime = process.env.BUILDFLOW_BROWSER_RUNTIME;
 if (!runtime) throw new Error('registered BuildFlow browser runtime is required');
 const { withBrowser } = await import(pathToFileURL(runtime).href);
 const prefix = '/app/authorization-test';
-const assets = new URL('../runtime/runtimepanel/web/', import.meta.url);
 const secret = 'FIXTURE-SUDO-PASSWORD';
 const wrongSecret = 'WRONG-FIXTURE-PASSWORD';
-const assetNames = new Set([
-  'bootstrap.js', 'panel.js', 'source.js', 'extensions.js', 'drag.js',
-  'presentation.js', 'viewport.js', 'panel.css',
-]);
 const errors = [];
 let state;
 
@@ -114,13 +109,7 @@ const server = createServer(async (req, res) => {
       }));
       return;
     }
-    if (route.startsWith(prefix + '/_runtime/')) {
-      const file = route.slice((prefix + '/_runtime/').length);
-      if (!assetNames.has(file)) { res.writeHead(404); res.end(); return; }
-      res.setHeader('Content-Type', file.endsWith('.css') ? 'text/css' : 'text/javascript');
-      res.end(await readFile(new URL(file, assets)));
-      return;
-    }
+    if (await servePanelAsset(route, prefix, res)) return;
     res.setHeader('Content-Type', 'text/html');
     res.end(`<!doctype html><html><head><meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -156,5 +145,6 @@ try {
     state.deferred.release();
     state.deferred = null;
   }
+  server.closeAllConnections();
   await new Promise(resolve => server.close(resolve));
 }

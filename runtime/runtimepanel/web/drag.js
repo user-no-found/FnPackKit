@@ -1,68 +1,77 @@
-// Pointer geometry and local position are presentation state, never runtime authority.
-export function draggable(button, panel, key, viewport, enabled) {
-  const size = 44;
+import { launcherPoint, relativePosition, nearestEdge, storedPosition } from './geometry.js';
+
+// Pointer ownership is local to this launcher; a second finger cannot replace a gesture.
+export function draggable(button, key, viewport, { activity, dragging, placePanel,
+  now = () => Date.now() }) {
   let position = { x: 1, y: 0.38, edge: 'right' };
-  try {
-    const saved = JSON.parse(localStorage.getItem(key));
-    if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y) && ['left','right','top','bottom',''].includes(saved.edge)) {
-      position = { x: Math.max(0, Math.min(1, saved.x)), y: Math.max(0, Math.min(1, saved.y)), edge: saved.edge };
-    }
-  } catch {}
+  try { position = storedPosition(JSON.parse(localStorage.getItem(key))) || position; } catch {}
   let gesture = null;
-  let suppressClick = false;
-  const bounds = () => {
-    const view = viewport();
-    return { left: view.left, top: view.top, width: view.width, height: view.height,
-      x: Math.max(0, view.width-size), y: Math.max(0, view.height-size) };
-  };
+  let suppressed = null;
+
   function place() {
-    if (!enabled()) return;
-    const max = bounds();
-    const x = max.left + (position.edge === 'left' ? 0 : position.edge === 'right' ? max.x : position.x*max.x);
-    const y = max.top + (position.edge === 'top' ? 0 : position.edge === 'bottom' ? max.y : position.y*max.y);
-    button.style.left = x+'px';
-    button.style.top = y+'px';
+    const point = launcherPoint(position, viewport());
+    button.style.left = point.x + 'px';
+    button.style.top = point.y + 'px';
     button.dataset.edge = position.edge;
-    panel.style.left = Math.max(max.left+8, Math.min(x, max.left+max.width-Math.min(320, max.width-16)-8))+'px';
-    panel.style.top = Math.max(max.top+8, Math.min(y+size+8, max.top+max.height-panel.offsetHeight-8))+'px';
+    placePanel();
   }
   function save() { try { localStorage.setItem(key, JSON.stringify(position)); } catch {} }
-  button.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || !enabled()) return;
-    const rect = button.getBoundingClientRect();
-    gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: e.clientX-rect.left, dy: e.clientY-rect.top, moved: false };
-    button.setPointerCapture(e.pointerId);
-  });
-  button.addEventListener('pointermove', e => {
-    if (!gesture || gesture.id !== e.pointerId || !enabled()) return;
-    if (!gesture.moved && Math.hypot(e.clientX-gesture.x,e.clientY-gesture.y)<6) return;
-    gesture.moved = true;
-    const max = bounds();
-    const x = Math.max(0,Math.min(max.x,e.clientX-gesture.dx-max.left));
-    const y = Math.max(0,Math.min(max.y,e.clientY-gesture.dy-max.top));
-    position = { x: max.x ? x/max.x : 0, y: max.y ? y/max.y : 0, edge: '' };
-    button.dataset.dragging = 'true';
-    place();
-  });
-  function release(e) {
-    if (!gesture || gesture.id !== e.pointerId) return;
-    if (gesture.moved) {
-      const max = bounds();
-      const distances = [['left',position.x*max.x],['right',(1-position.x)*max.x],['top',position.y*max.y],['bottom',(1-position.y)*max.y]].sort((a,b)=>a[1]-b[1]);
-      position.edge = distances[0][1] <= 28 ? distances[0][0] : '';
-      suppressClick = true;
-      save();
-    }
-    gesture = null;
-    delete button.dataset.dragging;
-    if (button.hasPointerCapture(e.pointerId)) button.releasePointerCapture(e.pointerId);
+  function snap() {
+    position = nearestEdge(position, viewport());
+    save();
     place();
   }
-  button.addEventListener('pointerup',release);
-  button.addEventListener('pointercancel',release);
-  button.addEventListener('click',e=>{
-    if (suppressClick) { suppressClick=false; e.preventDefault(); e.stopImmediatePropagation(); }
-  },true);
-  place();
-  return { place };
+  function finish(event, cancelled = false) {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const owner = gesture;
+    if (!cancelled && event.isTrusted) activity();
+    if (gesture !== owner) return;
+    gesture = null;
+    delete button.dataset.dragging;
+    if (owner.moved || cancelled) suppressed = { id: owner.id, until: now() + 600 };
+    if (owner.moved) {
+      snap();
+      if (!cancelled && event.isTrusted) dragging();
+    }
+    try { if (button.hasPointerCapture(owner.id)) button.releasePointerCapture(owner.id); } catch {}
+    place();
+  }
+  button.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || event.isPrimary === false || gesture) return;
+    suppressed = null;
+    if (event.isTrusted) activity();
+    // The logical full-button origin avoids the half-hidden CSS transform offset.
+    gesture = { id: event.pointerId, x: event.clientX, y: event.clientY,
+      origin: launcherPoint(position, viewport()), moved: false };
+    try { button.setPointerCapture(event.pointerId); } catch {}
+  });
+  button.addEventListener('pointermove', event => {
+    if (!gesture || gesture.id !== event.pointerId) return;
+    const owner = gesture;
+    if (event.isTrusted) activity();
+    if (gesture !== owner) return;
+    const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
+    if (!gesture.moved && Math.hypot(dx, dy) < 6) return;
+    if (!gesture.moved) {
+      gesture.moved = true;
+      button.dataset.dragging = 'true';
+      if (event.isTrusted) dragging();
+    }
+    position = relativePosition({ x: gesture.origin.x + dx, y: gesture.origin.y + dy }, viewport());
+    place();
+  });
+  button.addEventListener('pointerup', event => finish(event));
+  button.addEventListener('pointercancel', event => finish(event, true));
+  button.addEventListener('lostpointercapture', event => finish(event, true));
+  button.addEventListener('click', event => {
+    if (!suppressed || now() > suppressed.until || event.detail === 0) return;
+    if (event.pointerId !== undefined && event.pointerId !== suppressed.id) return;
+    suppressed = null;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  return { place, settle() {
+    if (gesture) finish({ pointerId: gesture.id }, true);
+    snap();
+  } };
 }

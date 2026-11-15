@@ -28,6 +28,8 @@ Docker 为可选部署方式：**非必要不使用 Docker**，优先原生应�
 
 `webbridge` 是可选接入方式，不应把所有原生 FPK 都改成外部服务。程序按职责选择 `NewControlledRelay`、纯透传 `NewRelay` 或托管 `New`；应用自己的身份、配置、二进制和数据不放进 FnPackKit。
 
+共享面板的通用交互唯一归属于 `runtime/runtimepanel`：按钮旁浮窗、鼠标/触控拖动、吸边、半隐藏、3/5 秒空闲计时、关闭及输入焦点保护都由同一份共享资源实现。消费 FPK 不得复制、私有重实现或通过字符串替换（含 `strings.Replace`）覆盖共享 JS/CSS，也不得增加应用名、UA 或版本特判。应用继续负责真实业务权限、后端操作和声明式 `Layout`／`Action`／`Command` 扩展；工具栏入口与避让区域通过公开声明接入，不改写共享交互。
+
 ## 独立本地应用的 AI 接入边界
 
 - 用户要求“没有 FPK 也能运行，但 FPK 要能管理后端”时使用 `NewControlledRelay`，接口为 Authorize + Acquire + Control。FPK 可以创建/注入面板，提供启停、重启、更新按钮并显示实际结果；禁止把“不承载业务逻辑”误解为“不提供管理能力”。

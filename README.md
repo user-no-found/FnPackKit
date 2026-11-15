@@ -413,13 +413,17 @@ preparation, worker lifetime and actual browser/file access remain the applicati
 responsibility. Root regressions use separate explicit `FNP_TEST_USERNAME` (package)
 and `FNP_TEST_NAS_USERNAME` accounts with synthetic volumes.
 
+## 前台连接恢复
+
+需要在切换 App、锁屏或页面冻结后恢复业务事件的应用，可显式使用 [共享连接恢复协调器](docs/connection-recovery.md)。组件统一处理生命周期、事件合并、超时、有限重试和取消；应用只提供业务通道检查、重连和状态补齐回调。每次真正前台返回均验证原业务通道，即使后台定时器仍运行；检查健康时保留原连接并继续调用应用 resync，未提供 check 时保守重建。不自动刷新页面、重启后端或接入现有消费者，也不把 HTTP 可达或正常消息静默当成连接健康结论。
+
 ## 浏览器验证工具
 
 FPK 业务界面验证通过 BuildFlow 的 `buildflow.browser.resolve_browser` 选择用户级登记的 Node、Playwright 和 Chrome/Chromium。验证回调把 `tools.environment()` 传给测试进程，通过共享 JavaScript 启动/关闭接口运行用例。各应用保留业务断言；FnPackKit 的 `LifecycleFixture` 负责实际归档和隔离部署。浏览器测试依赖不写死其他应用的缓存或系统 Chrome 路径。`browser_assets` 管理随 FPK 交付的网页资源，与构建机的测试浏览器环境分别管理。
 
 ## 共享后端控制面板
 
-`runtime/backend` 与 `runtime/runtimepanel` 提供按用户串行控制、手动暂停、独立停机入口和可拖动半隐藏面板。应用适配真实进程及权限，控制资源在实例获取前处理；HTML 注入保留原 CSP nonce。接入、协议和应用扩展见 [共享后端控制面板](docs/runtime-panel.md)。
+`runtime/backend` 与 `runtime/runtimepanel` 提供按用户串行控制、手动暂停、独立停机入口和同一套手机/Web 按钮旁小浮窗。共享按钮支持鼠标与触控拖动、最近边吸附；一般及展开后 5 秒无操作收起并半隐藏，半隐藏首次点击仅露出完整球，3 秒内再次点击才展开。关闭只清理 UI 和一次性授权，不取消已接受的服务端操作。通用交互唯一由共享库拥有，消费 FPK 不得复制或字符串替换共享 JS/CSS；应用保留真实权限、进程控制和声明式扩展。控制资源在实例获取前处理；HTML 注入保留原 CSP nonce。接入、协议、工具栏与输入焦点契约见 [共享后端控制面板](docs/runtime-panel.md)。
 
 ## 独立本机 Web 服务
 

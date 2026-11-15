@@ -1,4 +1,5 @@
 import { installPresentation } from './presentation.js';
+import { createInteraction } from './state.js';
 import { installExtensions } from './extensions.js';
 import { renderSource } from './source.js';
 import { scopeNotice, scopeConfirmation } from './scope.js';
@@ -71,7 +72,21 @@ export function installPanel(config) {
   const note=element('p',scopeNotice(config.scope),'footnote');
   panel.append(head,status,source,actions,commandBar,confirm,extensions,notices,refresh,note);
   shadow.append(toggle,panel); document.body.append(host);
-  const drag=installPresentation(host,toggle,panel,config,()=>{open(false);drag.focusLauncher();});
+  let drag=null;
+  const interaction=createInteraction({
+    onClose() { panel.hidden=true; resetPending(); },
+    onChange(value) {
+      host.dataset.uiState=value; toggle.dataset.uiState=value;
+      const opening=value==='open' && panel.hidden;
+      if(opening) pending={};
+      panel.hidden=value!=='open';
+      toggle.dataset.open=String(!panel.hidden); toggle.setAttribute('aria-expanded',String(!panel.hidden));
+      if(value==='half') drag?.settle();
+      drag?.place();
+      if(opening) refreshStatus();
+    },
+  });
+  drag=installPresentation(host,toggle,panel,config,interaction);
   function isCurrent(owner) { return Boolean(owner) && pending===owner && !panel.hidden; }
   function clearPassword() {
     if(pending?.password) {
@@ -83,31 +98,23 @@ export function installPanel(config) {
     clearPassword(); confirm.hidden=true; pending=panel.hidden?null:{};
   }
   function open(value) {
-    if(value && panel.hidden) pending={};
-    panel.hidden=!value; toggle.dataset.open=String(value); toggle.setAttribute('aria-expanded',String(value));
-    if (value) { drag.place(); refreshStatus(); }
-    // Closing only invalidates the UI owner, not an accepted backend operation.
-    else { resetPending(); drag.place(); }
+    if(value) interaction.open();
+    // Closing invalidates only the UI owner, not an accepted backend operation.
+    else interaction.close();
   }
   addEventListener('fnpackkit:open-controls',()=>{
     open(true);
     const owner=pending;
-    requestAnimationFrame(()=>{if(isCurrent(owner))close.focus({preventScroll:true});});
+    requestAnimationFrame(()=>{if(isCurrent(owner))drag.focusControl(close);});
   });
   addEventListener('fnpackkit:notice',event=>{
     const message=event.detail?.message;
     if(typeof message==='string' && message.length<=512){notices.textContent=message;drag.place();}
   });
-  toggle.addEventListener('click',()=>open(panel.hidden));
+  toggle.addEventListener('click',()=>interaction.activate());
   close.addEventListener('click',()=>{open(false);drag.focusLauncher();});
   shadow.addEventListener('keydown',e=>{
     if(e.key==='Escape'){e.preventDefault();e.stopPropagation();open(false);drag.focusLauncher();}
-    if(e.key==='Tab' && !panel.hidden && host.dataset.compact==='true'){
-      const focusable=[...panel.querySelectorAll('button,input')].filter(node=>!node.disabled&&node.getClientRects().length);
-      const index=focusable.indexOf(shadow.activeElement);
-      e.preventDefault();e.stopPropagation();
-      focusable[(index+(e.shiftKey?-1:1)+focusable.length)%focusable.length]?.focus();
-    }
   });
   function render() {
     renderSource(source,current?.source);
@@ -159,7 +166,7 @@ export function installPanel(config) {
       warning.textContent=scopeConfirmation(config.scope,action);
       proceed.textContent=action==='restart'?'确认重启':'确认停止';
     }
-    proceed.focus();drag.place();
+    drag.focusControl(proceed);drag.place();
   }
   cancel.addEventListener('click',()=>{resetPending();drag.place();});
   proceed.addEventListener('click',()=>{
@@ -210,7 +217,12 @@ export function installPanel(config) {
     finally {busy=false;render();drag.place();}
   }
   installExtensions(extensions,config.actions,()=>open(false),()=>drag.place());
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden && !panel.hidden)refreshStatus();});
+  document.addEventListener('visibilitychange',()=>{
+    interaction.check();
+    if(!document.hidden && !panel.hidden) refreshStatus();
+  });
+  addEventListener('pageshow',()=>interaction.check());
+  addEventListener('focus',()=>interaction.check());
   if(document.documentElement.hasAttribute('data-runtime-page')) open(true);
   else refreshStatus();
 }
